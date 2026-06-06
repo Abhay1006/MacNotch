@@ -28,6 +28,28 @@ struct SportMatch: Identifiable, Equatable {
     var isScheduled: Bool {
         return statusState == "pre"
     }
+    
+    var timeUntilKickoff: TimeInterval? {
+        guard !dateString.isEmpty else { return nil }
+        let isoFormatter = ISO8601DateFormatter()
+        var dateObj = isoFormatter.date(from: dateString)
+        
+        if dateObj == nil {
+            let df = DateFormatter()
+            df.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+            df.timeZone = TimeZone(secondsFromGMT: 0)
+            dateObj = df.date(from: dateString)
+        }
+        
+        if dateObj == nil {
+            let df = DateFormatter()
+            df.dateFormat = "yyyy-MM-dd'T'HH:mmZ"
+            dateObj = df.date(from: dateString)
+        }
+        
+        guard let date = dateObj else { return nil }
+        return date.timeIntervalSinceNow
+    }
 }
 
 class SportsManager: ObservableObject {

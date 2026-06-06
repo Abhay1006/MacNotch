@@ -96,10 +96,30 @@ struct NotchIslandView: View {
     @State private var lastMatchStatusState: String? = nil
     @State private var lastMatchStatusDetail: String? = nil
     
+    @State private var currentTime = Date()
+    let updateTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
+    
+    var shouldShowFavoriteTeamMatchCollapsed: Bool {
+        guard let match = sportsManager.favoriteTeamMatch else { return false }
+        if match.isLive {
+            return true
+        }
+        if match.isScheduled {
+            if let kickoff = match.timeUntilKickoff {
+                if kickoff <= 1800 {
+                    return true
+                }
+            }
+            let secondsSince1970 = Int(currentTime.timeIntervalSince1970)
+            return (secondsSince1970 % 180) < 10
+        }
+        let secondsSince1970 = Int(currentTime.timeIntervalSince1970)
+        return (secondsSince1970 % 180) < 10
+    }
+    
     // Callback to resize the window when content size changes
     var onSizeChanged: (CGSize) -> Void
     
-    // Size constants for different states
     // Size constants for different states
     var bodySize: CGSize {
         if !isExpanded {
@@ -116,7 +136,7 @@ struct NotchIslandView: View {
             if musicManager.isPlaying {
                 return CGSize(width: 240, height: 35)
             }
-            if sportsManager.favoriteTeamMatch != nil {
+            if sportsManager.favoriteTeamMatch != nil && shouldShowFavoriteTeamMatchCollapsed {
                 return CGSize(width: 300, height: 35)
             }
             return CGSize(width: 240, height: 35)
@@ -163,6 +183,10 @@ struct NotchIslandView: View {
         .onChange(of: sportsManager.favoriteTeamMatch) { _, _ in updateWindowSize() }
         .onChange(of: notificationManager.activeNotification) { _, _ in updateWindowSize() }
         .onChange(of: zenManager.isActive) { _, _ in updateWindowSize() }
+        .onReceive(updateTimer) { _ in
+            currentTime = Date()
+            updateWindowSize()
+        }
         .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
             for provider in providers {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -438,7 +462,7 @@ struct NotchIslandView: View {
                 // Right side: Audio visualizer micro-animation
                 MiniVisualizer(isPlaying: true, color: .pink)
                     .padding(.trailing, 10)
-            } else if let match = sportsManager.favoriteTeamMatch, match.isScheduled {
+            } else if let match = sportsManager.favoriteTeamMatch, match.isScheduled, shouldShowFavoriteTeamMatchCollapsed {
                 // Left side: Home Team logo
                 HStack(spacing: 5) {
                     if let logo = match.homeLogo, let url = URL(string: logo) {
@@ -472,7 +496,7 @@ struct NotchIslandView: View {
                         .foregroundColor(.white.opacity(0.6))
                 }
                 .padding(.trailing, 10)
-            } else if let match = sportsManager.favoriteTeamMatch, match.isFinished {
+            } else if let match = sportsManager.favoriteTeamMatch, match.isFinished, shouldShowFavoriteTeamMatchCollapsed {
                 // Left side: Home Team score and logo at extreme left end
                 HStack(spacing: 5) {
                     Text("\(match.homeScore)")
