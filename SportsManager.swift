@@ -111,8 +111,46 @@ class SportsManager: ObservableObject {
     }
     
     func startTimer() {
+        var shouldPoll = false
+        var interval = 60.0
+        
+        if let match = favoriteTeamMatch {
+            if match.isLive {
+                shouldPoll = true
+                interval = 30.0
+            } else if match.isScheduled {
+                if let kickoff = match.timeUntilKickoff {
+                    // Poll if starting in <= 30 minutes
+                    if kickoff <= 1800 {
+                        shouldPoll = true
+                        interval = 60.0
+                    }
+                }
+            } else if match.isFinished {
+                if let kickoff = match.timeUntilKickoff {
+                    // Poll if finished within 2 hours
+                    if abs(kickoff) <= 7200 {
+                        shouldPoll = true
+                        interval = 60.0
+                    }
+                }
+            }
+        }
+        
+        if !shouldPoll {
+            if timer != nil {
+                timer?.invalidate()
+                timer = nil
+            }
+            return
+        }
+        
+        // If already running with the correct interval, do nothing
+        if timer != nil && currentTimerInterval == interval {
+            return
+        }
+        
         timer?.invalidate()
-        let interval = (favoriteTeamMatch?.isLive ?? false) ? 30.0 : 60.0
         currentTimerInterval = interval
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.fetchScores()
@@ -191,12 +229,8 @@ class SportsManager: ObservableObject {
                 self.favoriteTeamMatch = nil
             }
             
-            // Dynamically adjust polling speed based on whether the match is live
-            let isNowLive = self.favoriteTeamMatch?.isLive ?? false
-            let expectedInterval = isNowLive ? 30.0 : 60.0
-            if self.currentTimerInterval != expectedInterval {
-                self.startTimer()
-            }
+            // Dynamically adjust polling speed/state based on match timing
+            self.startTimer()
         }
     }
     

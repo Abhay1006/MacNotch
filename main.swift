@@ -65,11 +65,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let midX = screen.frame.midX
         let maxY = screen.frame.maxY
         
+        let detectionWidth = max(240, targetSize.width)
+        let detectionHeight = max(35, targetSize.height)
         let targetFrame = NSRect(
-            x: midX - targetSize.width / 2,
-            y: maxY - targetSize.height,
-            width: targetSize.width,
-            height: targetSize.height
+            x: midX - detectionWidth / 2,
+            y: maxY - detectionHeight,
+            width: detectionWidth,
+            height: detectionHeight
         )
         
         let mouseLoc = NSEvent.mouseLocation

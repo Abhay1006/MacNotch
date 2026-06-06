@@ -139,7 +139,7 @@ struct NotchIslandView: View {
             if sportsManager.favoriteTeamMatch != nil && shouldShowFavoriteTeamMatchCollapsed {
                 return CGSize(width: 300, height: 35)
             }
-            return CGSize(width: 240, height: 35)
+            return CGSize(width: 110, height: 22) // Hide behind the camera!
         }
         
         switch currentTab {
@@ -178,8 +178,18 @@ struct NotchIslandView: View {
                 )
                 .shadow(color: Color.black.opacity(0.5), radius: 10, x: 0, y: 5)
         )
-        .onChange(of: appState.isExpanded) { _, _ in updateWindowSize() }
-        .onChange(of: currentTab) { updateWindowSize() }
+        .onChange(of: appState.isExpanded) { _, newValue in
+            updateWindowSize()
+            if newValue && currentTab == .sports {
+                sportsManager.fetchScores()
+            }
+        }
+        .onChange(of: currentTab) {
+            updateWindowSize()
+            if currentTab == .sports {
+                sportsManager.fetchScores()
+            }
+        }
         .onChange(of: sportsManager.favoriteTeamMatch) { _, _ in updateWindowSize() }
         .onChange(of: notificationManager.activeNotification) { _, _ in updateWindowSize() }
         .onChange(of: zenManager.isActive) { _, _ in updateWindowSize() }
@@ -539,36 +549,8 @@ struct NotchIslandView: View {
                 }
                 .padding(.trailing, 10)
             } else {
-                // Idle state: Clear center camera area, place team or app name at extreme ends
-                if !sportsManager.favoriteTeam.isEmpty {
-                    HStack {
-                        Image(systemName: "trophy.fill")
-                            .font(.system(size: 10))
-                            .foregroundColor(.pink)
-                            .padding(.leading, 10)
-                        
-                        Spacer()
-                        
-                        Text(sportsManager.favoriteTeam)
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .foregroundColor(.white.opacity(0.8))
-                            .padding(.trailing, 10)
-                    }
-                } else {
-                    HStack {
-                        Circle()
-                            .fill(Color.pink)
-                            .frame(width: 6, height: 6)
-                            .padding(.leading, 10)
-                        
-                        Spacer()
-                        
-                        Text("MacNotch")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .foregroundColor(.white.opacity(0.8))
-                            .padding(.trailing, 10)
-                    }
-                }
+                // Idle state: Hidden behind the camera notch
+                Color.clear
             }
         }
         .frame(height: 35)
