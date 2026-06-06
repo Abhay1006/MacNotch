@@ -1,0 +1,5 @@
+.DS_Store
+MacNotch.app/
+MacNotch_binary
+*.swp
+*.o
