@@ -4,7 +4,11 @@ import Cocoa
 
 class MusicManager: ObservableObject {
     @Published var activePlayer: PlayerType = .none
-    @Published var isPlaying: Bool = false
+    @Published var isPlaying: Bool = false {
+        didSet {
+            manageProgressTimer()
+        }
+    }
     @Published var trackTitle: String = ""
     @Published var artist: String = ""
     @Published var playerPosition: Double = 0
@@ -12,7 +16,7 @@ class MusicManager: ObservableObject {
     @Published var artworkImage: NSImage? = nil
     
     private var lastTrackIdentifier: String = ""
-    private var timer: AnyCancellable?
+    private var progressTimer: Timer?
     
     enum PlayerType: String {
         case music = "Music"
@@ -27,14 +31,24 @@ class MusicManager: ObservableObject {
     }
     
     func startMonitoring() {
-        // Poll every 1.0 second on background thread for track details and progress
-        timer = Timer.publish(every: 1.0, on: .main, in: .common)
-            .autoconnect()
-            .sink { [weak self] _ in
-                DispatchQueue.global(qos: .userInitiated).async {
-                    self?.pollMusicStateBackground()
+        DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("com.apple.Music.playerInfo"), object: nil, queue: .main) { [weak self] _ in
+            // When track changes, plays, or pauses, we do ONE apple script call to resync state
+            DispatchQueue.global(qos: .userInitiated).async {
+                self?.pollMusicStateBackground()
+            }
+        }
+    }
+    
+    private func manageProgressTimer() {
+        progressTimer?.invalidate()
+        if isPlaying {
+            progressTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                if self.playerPosition < self.trackDuration {
+                    self.playerPosition += 1.0
                 }
             }
+        }
     }
     
     private func updateArtwork() {
@@ -145,11 +159,11 @@ class MusicManager: ObservableObject {
         let dur = Double(parts[5]) ?? 0.0
         
         self.activePlayer = player
-        self.isPlaying = (status == "Playing")
         self.trackTitle = title.isEmpty ? "Not Playing" : title
         self.artist = art.isEmpty ? "" : art
         self.playerPosition = pos
         self.trackDuration = dur
+        self.isPlaying = (status == "Playing") // This will trigger manageProgressTimer()
         
         let currentTrackIdentifier = "\(player.rawValue)|\(title)|\(art)"
         if currentTrackIdentifier != lastTrackIdentifier {

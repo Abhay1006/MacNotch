@@ -11,7 +11,8 @@ class AppState: ObservableObject {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: TouchBarWindow!
     let appState = AppState()
-    private var mouseTimer: Timer?
+    private var globalEventMonitor: Any?
+    private var localEventMonitor: Any?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         setbuf(stdout, nil)
@@ -54,8 +55,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var targetSize = CGSize(width: 240, height: 35)
     
     private func startMouseMonitoring() {
-        mouseTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        let handler: (NSEvent) -> Void = { [weak self] _ in
             self?.checkMouseHover()
+        }
+        globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: handler)
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+            self?.checkMouseHover()
+            return event
         }
     }
     
@@ -86,6 +92,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func resizeWindow(to size: CGSize) {
         guard let window = self.window else { return }
+        if self.targetSize == size { return } // Prevent continuous redundant animations
         self.targetSize = size
         let screen = window.screen ?? NSScreen.screens.first ?? NSScreen.main ?? NSScreen.screens[0]
         let midX = screen.frame.midX

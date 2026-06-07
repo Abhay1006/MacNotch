@@ -14,6 +14,7 @@ class SystemManager: ObservableObject {
     
     let calendarManager = CalendarManager()
     private let cpuCounter = CPUUsage()
+    private var lastVolumeCheck: Date = Date.distantPast
     
     private var timer: AnyCancellable?
     
@@ -40,8 +41,8 @@ class SystemManager: ObservableObject {
     }
     
     func startMonitoring() {
-        // Poll system status every 2.0 seconds
-        timer = Timer.publish(every: 2.0, on: .main, in: .common)
+        // Poll system status every 5.0 seconds
+        timer = Timer.publish(every: 5.0, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
                 self?.updateSystemStatusAsync()
@@ -74,11 +75,14 @@ class SystemManager: ObservableObject {
             }
             
             // 2. Volume status
-            var tempVolume = 50
-            let volScript = "output volume of (get volume settings)"
-            if let volResult = self.runAppleScript(volScript),
-               let vol = Int(volResult.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                tempVolume = vol
+            var tempVolume = self.systemVolume
+            if Date().timeIntervalSince(self.lastVolumeCheck) >= 10.0 {
+                let volScript = "output volume of (get volume settings)"
+                if let volResult = self.runAppleScript(volScript),
+                   let vol = Int(volResult.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                    tempVolume = vol
+                    self.lastVolumeCheck = Date()
+                }
             }
             
             // 3. Brightness status
