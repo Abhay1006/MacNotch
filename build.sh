@@ -17,13 +17,14 @@ swiftc -sdk $(xcrun --show-sdk-path --sdk macosx) \
        -target arm64-apple-macosx14.0 \
        -O \
        -o "${APP_NAME}_binary" \
-       main.swift \
-       NotchIslandView.swift \
-       ClipboardManager.swift \
-       MusicManager.swift \
-       SystemManager.swift \
-       CalendarManager.swift \
-       SportsManager.swift
+       Sources/Core/main.swift \
+       Sources/Core/AppDelegate.swift \
+       Sources/Views/NotchIslandView.swift \
+       Sources/Managers/ClipboardManager.swift \
+       Sources/Managers/MusicManager.swift \
+       Sources/Managers/SystemManager.swift \
+       Sources/Managers/CalendarManager.swift \
+       Sources/Managers/SportsManager.swift
 
 # Create the bundle structure
 echo "📂 Creating .app bundle structure..."
@@ -32,7 +33,7 @@ mkdir -p "${APP_BUNDLE}/Contents/Resources"
 
 # Move the compiled binary and Info.plist
 mv "${APP_NAME}_binary" "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
-cp Info.plist "${APP_BUNDLE}/Contents/Info.plist"
+cp Sources/Core/Info.plist "${APP_BUNDLE}/Contents/Info.plist"
 
 # Set executable permissions
 chmod +x "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"

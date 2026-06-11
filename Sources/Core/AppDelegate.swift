@@ -1,8 +1,6 @@
 import Cocoa
 import SwiftUI
 
-// Global strong reference to keep the AppDelegate alive in memory
-var appDelegate: AppDelegate?
 
 class AppState: ObservableObject {
     @Published var isExpanded: Bool = false
@@ -239,10 +237,3 @@ class TouchBarWindow: NSPanel {
         self.acceptsMouseMovedEvents = true
     }
 }
-
-// Start NSApplication manually
-let app = NSApplication.shared
-let delegate = AppDelegate()
-appDelegate = delegate
-app.delegate = delegate
-app.run()
