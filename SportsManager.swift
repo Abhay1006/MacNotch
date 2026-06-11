@@ -60,6 +60,9 @@ class SportsManager: ObservableObject {
     @Published var favoriteTeamMatch: SportMatch? = nil
     @Published var isFetching = false
     
+    @Published var searchUpcomingMatches: [SportMatch] = []
+    @Published var searchLastGamePlayed: SportMatch? = nil
+    
     private var timer: Timer?
     private var currentTimerInterval: TimeInterval = 60.0
     private var cancellables = Set<AnyCancellable>()
@@ -157,6 +160,18 @@ class SportsManager: ObservableObject {
         }
     }
     
+    private func getDateRangeString() -> String {
+        let calendar = Calendar.current
+        let now = Date()
+        guard let startDate = calendar.date(byAdding: .day, value: -30, to: now),
+              let endDate = calendar.date(byAdding: .day, value: 90, to: now) else {
+            return ""
+        }
+        let df = DateFormatter()
+        df.dateFormat = "yyyyMMdd"
+        return "\(df.string(from: startDate))-\(df.string(from: endDate))"
+    }
+    
     func fetchScores() {
         guard !isFetching else { return }
         isFetching = true
@@ -175,10 +190,11 @@ class SportsManager: ObservableObject {
         
         var allMatches: [SportMatch] = []
         let group = DispatchGroup()
+        let datesParam = favoriteTeam.isEmpty ? nil : getDateRangeString()
         
         for league in leaguesToFetch {
             group.enter()
-            fetchLeagueMatches(league: league) { matches in
+            fetchLeagueMatches(league: league, dates: datesParam) { matches in
                 if let matches = matches {
                     allMatches.append(contentsOf: matches)
                 }
@@ -210,12 +226,20 @@ class SportsManager: ObservableObject {
                 let scheduledMatches = matching.filter { $0.isScheduled }
                 let finishedMatches = matching.filter { $0.isFinished }
                 
+                let recentFinished = finishedMatches.filter { match in
+                    if let t = match.timeUntilKickoff { return t > -86400 }
+                    return false
+                }.sorted { $0.dateString > $1.dateString }
+                
                 // 3. Deterministically choose the best match:
                 // - First preference: Live match
-                // - Second preference: Scheduled match closest to today (earliest dateString)
-                // - Third preference: Finished match that was most recent (latest dateString)
+                // - Second preference: Recently finished match (< 24 hours)
+                // - Third preference: Scheduled match closest to today (earliest dateString)
+                // - Fourth preference: Finished match that was most recent (latest dateString)
                 if let live = liveMatches.first {
                     self.favoriteTeamMatch = live
+                } else if let recent = recentFinished.first {
+                    self.favoriteTeamMatch = recent
                 } else if !scheduledMatches.isEmpty {
                     let sortedScheduled = scheduledMatches.sorted { $0.dateString < $1.dateString }
                     self.favoriteTeamMatch = sortedScheduled.first
@@ -225,8 +249,17 @@ class SportsManager: ObservableObject {
                 } else {
                     self.favoriteTeamMatch = nil
                 }
+                
+                // 4. Populate search properties for UI
+                self.searchLastGamePlayed = finishedMatches.sorted { $0.dateString > $1.dateString }.first
+                
+                let searchLive = matching.filter { $0.isLive && $0.leagueId == self.selectedLeague }
+                let searchUpcoming = matching.filter { $0.isScheduled && $0.leagueId == self.selectedLeague }
+                self.searchUpcomingMatches = searchLive + searchUpcoming.sorted { $0.dateString < $1.dateString }
             } else {
                 self.favoriteTeamMatch = nil
+                self.searchLastGamePlayed = nil
+                self.searchUpcomingMatches = []
             }
             
             // Dynamically adjust polling speed/state based on match timing
@@ -234,8 +267,11 @@ class SportsManager: ObservableObject {
         }
     }
     
-    private func fetchLeagueMatches(league: String, completion: @escaping ([SportMatch]?) -> Void) {
-        let urlString = "https://site.api.espn.com/apis/site/v2/sports/soccer/\(league)/scoreboard"
+    private func fetchLeagueMatches(league: String, dates: String? = nil, completion: @escaping ([SportMatch]?) -> Void) {
+        var urlString = "https://site.api.espn.com/apis/site/v2/sports/soccer/\(league)/scoreboard?limit=200"
+        if let dates = dates {
+            urlString += "&dates=\(dates)"
+        }
         guard let url = URL(string: urlString) else {
             completion(nil)
             return

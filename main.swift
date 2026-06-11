@@ -6,26 +6,88 @@ var appDelegate: AppDelegate?
 
 class AppState: ObservableObject {
     @Published var isExpanded: Bool = false
+    @Published var hoverLocked: Bool = false
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    var window: TouchBarWindow!
-    let appState = AppState()
-    private var globalEventMonitor: Any?
-    private var localEventMonitor: Any?
+    private var controllers: [NotchWindowController] = []
+    private(set) var previousActiveApp: NSRunningApplication?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         setbuf(stdout, nil)
         // Set accessory activation policy so the app doesn't show in the Dock
         NSApp.setActivationPolicy(.accessory)
         
-        let initialSize = CGSize(width: 240, height: 35)
-        let screen = NSScreen.screens.first ?? NSScreen.main ?? NSScreen.screens[0]
+        // Track the previously active application
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            if let newApp = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+                if newApp.bundleIdentifier != Bundle.main.bundleIdentifier {
+                    self?.previousActiveApp = newApp
+                }
+            }
+        }
         
-        let x = (screen.frame.width - initialSize.width) / 2
+        setupWindows()
+        
+        // Listen to screen changes (plugging in / unplugging external monitors)
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.setupWindows()
+        }
+    }
+    
+    func setupWindows() {
+        // Clear existing controllers and close their windows
+        for controller in controllers {
+            controller.window.close()
+        }
+        controllers.removeAll()
+        
+        // Create a controller for each screen
+        for screen in NSScreen.screens {
+            let controller = NotchWindowController(screen: screen, delegate: self)
+            controllers.append(controller)
+        }
+    }
+    
+    func restorePreviousActiveApp() {
+        if let app = previousActiveApp {
+            app.activate()
+        }
+    }
+}
+
+class NotchWindowController {
+    let window: TouchBarWindow
+    let appState: AppState
+    let screen: NSScreen
+    weak var delegate: AppDelegate?
+    
+    private var globalEventMonitor: Any?
+    private var localEventMonitor: Any?
+    private var isMenuTracking = false
+    private var menuCooldownActive = false
+    private var targetSize = CGSize(width: 240, height: 35)
+    
+    private var menuBeginObserver: Any?
+    private var menuEndObserver: Any?
+    
+    init(screen: NSScreen, delegate: AppDelegate) {
+        self.screen = screen
+        self.delegate = delegate
+        self.appState = AppState()
+        
+        let initialSize = CGSize(width: 240, height: 35)
+        let x = screen.frame.minX + (screen.frame.width - initialSize.width) / 2
         let y = screen.frame.maxY - initialSize.height
         
-        // Create a custom borderless panel that floats on top of other windows and doesn't take focus away automatically
         window = TouchBarWindow(
             contentRect: NSRect(x: x, y: y, width: initialSize.width, height: initialSize.height),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -33,26 +95,69 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false
         )
         
-        // Floating level above most menus but below screen saver / overlay
         window.level = .statusBar
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = false
         
-        // Instantiate our SwiftUI view and pass the appState and resizing handler
         let contentView = NotchIslandView(appState: appState) { [weak self] newSize in
             self?.resizeWindow(to: newSize)
         }
         
-        window.contentView = NSHostingView(rootView: contentView)
+        class AcceptsFirstMouseHostingView<Content: View>: NSHostingView<Content> {
+            override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+                return true
+            }
+        }
+        
+        window.contentView = AcceptsFirstMouseHostingView(rootView: contentView)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         
         startMouseMonitoring()
+        setupMenuObservers()
     }
     
-    private var targetSize = CGSize(width: 240, height: 35)
+    deinit {
+        if let monitor = globalEventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = localEventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let observer = menuBeginObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = menuEndObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+    
+    private func setupMenuObservers() {
+        menuBeginObserver = NotificationCenter.default.addObserver(
+            forName: NSMenu.didBeginTrackingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.isMenuTracking = true
+        }
+        
+        menuEndObserver = NotificationCenter.default.addObserver(
+            forName: NSMenu.didEndTrackingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.isMenuTracking = false
+            self?.menuCooldownActive = true
+            
+            // Grace period to move mouse back to Notch
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.menuCooldownActive = false
+                self?.checkMouseHover()
+            }
+        }
+    }
     
     private func startMouseMonitoring() {
         let handler: (NSEvent) -> Void = { [weak self] _ in
@@ -66,9 +171,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func checkMouseHover() {
-        guard let window = self.window else { return }
-        let screen = window.screen ?? NSScreen.screens.first ?? NSScreen.main ?? NSScreen.screens[0]
-        let midX = screen.frame.midX
+        guard !appState.hoverLocked else { return }
+        guard !isMenuTracking else { return }
+        guard !menuCooldownActive else { return }
+        
+        let midX = screen.frame.minX + screen.frame.width / 2
         let maxY = screen.frame.maxY
         
         let detectionWidth = max(240, targetSize.width)
@@ -91,11 +198,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func resizeWindow(to size: CGSize) {
-        guard let window = self.window else { return }
         if self.targetSize == size { return } // Prevent continuous redundant animations
         self.targetSize = size
-        let screen = window.screen ?? NSScreen.screens.first ?? NSScreen.main ?? NSScreen.screens[0]
-        let midX = screen.frame.midX
+        
+        let midX = screen.frame.minX + screen.frame.width / 2
         let maxY = screen.frame.maxY
         
         let newFrame = NSRect(

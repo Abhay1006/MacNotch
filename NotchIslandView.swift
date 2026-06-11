@@ -104,17 +104,32 @@ struct NotchIslandView: View {
         if match.isLive {
             return true
         }
+        
+        let secondsSince1970 = Int(currentTime.timeIntervalSince1970)
+        let isRotationTime = (secondsSince1970 % 180) < 10
+        
         if match.isScheduled {
             if let kickoff = match.timeUntilKickoff {
                 if kickoff <= 1800 {
                     return true
                 }
+                if kickoff <= 86400 {
+                    return isRotationTime
+                }
             }
-            let secondsSince1970 = Int(currentTime.timeIntervalSince1970)
-            return (secondsSince1970 % 180) < 10
+            return false
         }
-        let secondsSince1970 = Int(currentTime.timeIntervalSince1970)
-        return (secondsSince1970 % 180) < 10
+        
+        if match.isFinished {
+            if let kickoff = match.timeUntilKickoff {
+                if kickoff > -86400 {
+                    return isRotationTime
+                }
+            }
+            return false
+        }
+        
+        return false
     }
     
     // Callback to resize the window when content size changes
@@ -128,13 +143,13 @@ struct NotchIslandView: View {
                 return CGSize(width: 240, height: 35)
             }
             if notificationManager.activeNotification != nil {
-                return CGSize(width: 240, height: 35)
+                return CGSize(width: 300, height: 35)
             }
             if let match = sportsManager.favoriteTeamMatch, match.isLive {
                 return CGSize(width: 300, height: 35)
             }
             if musicManager.isPlaying {
-                return CGSize(width: 240, height: 35)
+                return CGSize(width: 300, height: 35)
             }
             if sportsManager.favoriteTeamMatch != nil && shouldShowFavoriteTeamMatchCollapsed {
                 return CGSize(width: 300, height: 35)
@@ -148,7 +163,7 @@ struct NotchIslandView: View {
         case .calendar:
             return CGSize(width: 380, height: 170)
         case .sports:
-            return CGSize(width: 380, height: sportsManager.favoriteTeamMatch != nil ? 305 : 230)
+            return CGSize(width: 380, height: sportsManager.favoriteTeamMatch != nil ? 335 : 255)
         case .clipboard:
             return CGSize(width: 380, height: fileShelfManager.files.isEmpty ? 355 : 390)
         case .system:
@@ -242,7 +257,7 @@ struct NotchIslandView: View {
             if firstItem.id != lastClipboardItemId {
                 lastClipboardItemId = firstItem.id
                 notificationManager.showNotification(
-                    title: "Copied to Clipboard",
+                    title: "Copied",
                     subtitle: firstItem.preview,
                     systemImage: "doc.on.doc"
                 )
@@ -365,7 +380,7 @@ struct NotchIslandView: View {
                     .clipShape(Circle())
                     .padding(.leading, 10)
                 
-                Spacer()
+                Spacer() // Completely clear camera notch area
                 
                 VStack(alignment: .leading, spacing: 0) {
                     Text(notification.title)
@@ -377,9 +392,8 @@ struct NotchIslandView: View {
                         .foregroundColor(.white.opacity(0.6))
                         .lineLimit(1)
                 }
-                .frame(maxWidth: 160, alignment: .leading)
-                
-                Spacer()
+                .frame(width: 90, alignment: .leading)
+                .padding(.trailing, 10)
             } else if zenManager.isActive {
                 // Zen Timer Active State
                 HStack(spacing: 6) {
@@ -458,18 +472,9 @@ struct NotchIslandView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .padding(.leading, 10)
                 
-                Spacer()
+                Spacer() // Completely clear the camera notch area in the center!
                 
-                // Center text
-                Text(musicManager.trackTitle)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                    .frame(maxWidth: 140)
-                
-                Spacer()
-                
-                // Right side: Audio visualizer micro-animation
+                // Right side: Audio visualizer (no track title in collapsed view)
                 MiniVisualizer(isPlaying: true, color: .pink)
                     .padding(.trailing, 10)
             } else if let match = sportsManager.favoriteTeamMatch, match.isScheduled, shouldShowFavoriteTeamMatchCollapsed {
@@ -560,7 +565,7 @@ struct NotchIslandView: View {
     private var expandedView: some View {
         VStack(spacing: 0) {
             // Unobstructed space for the physical camera notch
-            Spacer()
+            Color.clear
                 .frame(height: 35)
             
             // Tab Header (centered, below the notch)
@@ -1152,6 +1157,22 @@ struct NotchIslandView: View {
                                         recentlyCopiedId = nil
                                     }
                                 }
+                                
+                                // Collapse the notch immediately and temporarily lock hover monitoring
+                                appState.hoverLocked = true
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                                    appState.isExpanded = false
+                                }
+                                
+                                // Restore focus to the previous active application
+                                if let delegate = NSApp.delegate as? AppDelegate {
+                                    delegate.restorePreviousActiveApp()
+                                }
+                                
+                                // Unlock hover after a short delay (e.g. 1.0 second) to allow the mouse to leave
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                    appState.hoverLocked = false
+                                }
                             }
                         }
                     }
@@ -1314,59 +1335,62 @@ struct NotchIslandView: View {
             
             // Matches List
             ScrollView {
-                VStack(spacing: 6) {
-                    if sportsManager.isFetching && sportsManager.leagueMatches.isEmpty {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .pink))
-                            .scaleEffect(0.8)
-                            .padding(.top, 20)
-                    } else if sportsManager.leagueMatches.isEmpty {
-                        Text("No matches today")
-                            .font(.system(size: 11, design: .rounded))
-                            .foregroundColor(.white.opacity(0.4))
-                            .padding(.top, 24)
-                    } else {
-                        ForEach(sportsManager.leagueMatches) { match in
-                            HStack {
-                                // Home Team
-                                Text(match.homeTeam)
-                                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                                    .foregroundColor(.white)
-                                    .lineLimit(1)
-                                    .frame(maxWidth: .infinity, alignment: .trailing)
-                                
-                                // Score/Time
-                                if match.isScheduled {
-                                    Text(match.statusDetail)
-                                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                                        .foregroundColor(.white.opacity(0.6))
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.white.opacity(0.08))
-                                        .cornerRadius(4)
-                                        .frame(width: 70)
-                                } else {
-                                    Text("\(match.homeScore) - \(match.awayScore)")
-                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                        .foregroundColor(match.isLive ? .green : .white.opacity(0.8))
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(match.isLive ? Color.green.opacity(0.12) : Color.white.opacity(0.08))
-                                        .cornerRadius(4)
-                                        .frame(width: 70)
+                VStack(spacing: 8) {
+                    if !sportsManager.favoriteTeam.isEmpty {
+                        // SEARCH MODE
+                        if sportsManager.isFetching && sportsManager.searchUpcomingMatches.isEmpty && sportsManager.searchLastGamePlayed == nil {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .pink))
+                                .scaleEffect(0.8)
+                                .padding(.top, 20)
+                        } else if sportsManager.searchUpcomingMatches.isEmpty && sportsManager.searchLastGamePlayed == nil {
+                            Text("No matches found for '\(sportsManager.favoriteTeam)'")
+                                .font(.system(size: 11, design: .rounded))
+                                .foregroundColor(.white.opacity(0.4))
+                                .padding(.top, 24)
+                        } else {
+                            if let lastGame = sportsManager.searchLastGamePlayed {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("LAST GAME PLAYED")
+                                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                                        .foregroundColor(.white.opacity(0.4))
+                                        .padding(.leading, 2)
+                                    
+                                    SportsMatchRow(match: lastGame)
                                 }
-                                
-                                // Away Team
-                                Text(match.awayTeam)
-                                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                                    .foregroundColor(.white)
-                                    .lineLimit(1)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                            .background(Color.white.opacity(0.03))
-                            .cornerRadius(6)
+                            
+                            if !sportsManager.searchUpcomingMatches.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    let leagueName = sportsManager.leaguesList.first(where: { $0.0 == sportsManager.selectedLeague })?.1 ?? "Selected League"
+                                    Text("UPCOMING IN \(leagueName.uppercased())")
+                                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                                        .foregroundColor(.white.opacity(0.4))
+                                        .padding(.leading, 2)
+                                        .padding(.top, 4)
+                                    
+                                    ForEach(sportsManager.searchUpcomingMatches) { match in
+                                        SportsMatchRow(match: match)
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // DEFAULT MODE (SHOW TODAY'S MATCHES IN THE LEAGUE)
+                        if sportsManager.isFetching && sportsManager.leagueMatches.isEmpty {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .pink))
+                                .scaleEffect(0.8)
+                                .padding(.top, 20)
+                        } else if sportsManager.leagueMatches.isEmpty {
+                            Text("No matches today")
+                                .font(.system(size: 11, design: .rounded))
+                                .foregroundColor(.white.opacity(0.4))
+                                .padding(.top, 24)
+                        } else {
+                            ForEach(sportsManager.leagueMatches) { match in
+                                SportsMatchRow(match: match)
+                            }
                         }
                     }
                 }
@@ -1626,5 +1650,58 @@ class FavoriteAppsManager: ObservableObject {
            let decoded = try? JSONDecoder().decode([FavApp].self, from: data) {
             self.apps = decoded
         }
+    }
+}
+
+struct SportsMatchRow: View {
+    let match: SportMatch
+    
+    var body: some View {
+        VStack(alignment: .center, spacing: 2) {
+            HStack {
+                // Home Team
+                Text(match.homeTeam)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                
+                // Score/Time
+                if match.isScheduled {
+                    Text(match.statusDetail)
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.6))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.white.opacity(0.08))
+                        .cornerRadius(4)
+                        .frame(width: 70)
+                } else {
+                    Text("\(match.homeScore) - \(match.awayScore)")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(match.isLive ? .green : .white.opacity(0.8))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(match.isLive ? Color.green.opacity(0.12) : Color.white.opacity(0.08))
+                        .cornerRadius(4)
+                        .frame(width: 70)
+                }
+                
+                // Away Team
+                Text(match.awayTeam)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            
+            Text(match.leagueName)
+                .font(.system(size: 7, design: .rounded))
+                .foregroundColor(.white.opacity(0.4))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color.white.opacity(0.03))
+        .cornerRadius(6)
     }
 }
