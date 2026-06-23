@@ -24,7 +24,8 @@ swiftc -sdk $(xcrun --show-sdk-path --sdk macosx) \
        Sources/Managers/MusicManager.swift \
        Sources/Managers/SystemManager.swift \
        Sources/Managers/CalendarManager.swift \
-       Sources/Managers/SportsManager.swift
+       Sources/Managers/SportsManager.swift \
+       Sources/Managers/QuotesManager.swift
 
 # Create the bundle structure
 echo "📂 Creating .app bundle structure..."

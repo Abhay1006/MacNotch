@@ -10,6 +10,7 @@ enum IslandTab: String, CaseIterable {
     case system = "slider.horizontal.3"
     case zen = "leaf.fill"
     case apps = "square.grid.2x2.fill"
+    case quotes = "quote.bubble.fill"
 }
 
 struct ShelfFile: Identifiable, Equatable {
@@ -74,6 +75,7 @@ struct NotchIslandView: View {
     @StateObject var sportsManager = SportsManager()
     @StateObject var zenManager = ZenManager()
     @StateObject var favoriteAppsManager = FavoriteAppsManager()
+    @StateObject var quotesManager = QuotesManager()
     
     var isExpanded: Bool { appState.isExpanded }
     @State private var currentTab: IslandTab = .music
@@ -161,6 +163,8 @@ struct NotchIslandView: View {
             return CGSize(width: 380, height: 190)
         case .apps:
             return CGSize(width: 380, height: 210)
+        case .quotes:
+            return CGSize(width: 380, height: 170)
         }
     }
     
@@ -190,6 +194,8 @@ struct NotchIslandView: View {
         .onChange(of: currentTab) {
             if currentTab == .sports {
                 sportsManager.fetchScores()
+            } else if currentTab == .quotes {
+                quotesManager.selectNewQuote()
             }
         }
         .onChange(of: bodySize) { _, newSize in
@@ -594,6 +600,8 @@ struct NotchIslandView: View {
                     zenTabContent
                 case .apps:
                     appsTabContent
+                case .quotes:
+                    quotesTabContent
                 }
             }
             .transition(.asymmetric(
@@ -796,6 +804,66 @@ struct NotchIslandView: View {
         .padding(.top, 8)
         .padding(.bottom, 5)
         .frame(height: 125)
+    }
+    
+    // MARK: - Quotes Content
+    private var quotesTabContent: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Image(systemName: "quote.bubble.fill")
+                    .foregroundColor(.pink)
+                    .font(.system(size: 11))
+                Text("Motivational Quote")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.6))
+                    .textCase(.uppercase)
+                Spacer()
+                Button(action: {
+                    withAnimation {
+                        quotesManager.selectNewQuote()
+                    }
+                }) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+                .help("Get another quote")
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            
+            ScrollView(.vertical, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "quote.opening")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.pink.opacity(0.6))
+                        .padding(.top, 2)
+                    
+                    Text(quotesManager.currentQuote)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundColor(.white.opacity(0.9))
+                        .lineSpacing(3)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+            }
+            .frame(height: 52)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.white.opacity(0.04))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                    )
+            )
+            .padding(.horizontal, 16)
+        }
+        .frame(height: 80)
     }
     
     // MARK: - Music Content
