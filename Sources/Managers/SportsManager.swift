@@ -130,13 +130,8 @@ class SportsManager: ObservableObject {
                     }
                 }
             } else if match.isFinished {
-                if let kickoff = match.timeUntilKickoff {
-                    // Poll if finished within 2 hours
-                    if abs(kickoff) <= 7200 {
-                        shouldPoll = true
-                        interval = 60.0
-                    }
-                }
+                // Do not poll anymore since results are done/final
+                shouldPoll = false
             }
         }
         

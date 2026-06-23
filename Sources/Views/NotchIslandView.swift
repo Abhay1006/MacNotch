@@ -105,27 +105,16 @@ struct NotchIslandView: View {
             return true
         }
         
-        let secondsSince1970 = Int(currentTime.timeIntervalSince1970)
-        let isRotationTime = (secondsSince1970 % 180) < 10
-        
         if match.isScheduled {
             if let kickoff = match.timeUntilKickoff {
                 if kickoff <= 1800 {
                     return true
-                }
-                if kickoff <= 86400 {
-                    return isRotationTime
                 }
             }
             return false
         }
         
         if match.isFinished {
-            if let kickoff = match.timeUntilKickoff {
-                if kickoff > -86400 {
-                    return isRotationTime
-                }
-            }
             return false
         }
         
@@ -194,20 +183,21 @@ struct NotchIslandView: View {
                 .shadow(color: Color.black.opacity(0.5), radius: 10, x: 0, y: 5)
         )
         .onChange(of: appState.isExpanded) { _, newValue in
-            updateWindowSize()
             if newValue && currentTab == .sports {
                 sportsManager.fetchScores()
             }
         }
         .onChange(of: currentTab) {
-            updateWindowSize()
             if currentTab == .sports {
                 sportsManager.fetchScores()
             }
         }
-        .onChange(of: sportsManager.favoriteTeamMatch) { _, _ in updateWindowSize() }
-        .onChange(of: notificationManager.activeNotification) { _, _ in updateWindowSize() }
-        .onChange(of: zenManager.isActive) { _, _ in updateWindowSize() }
+        .onChange(of: bodySize) { _, newSize in
+            onSizeChanged(newSize)
+        }
+        .onAppear {
+            updateWindowSize()
+        }
         .onReceive(updateTimer) { _ in
             currentTime = Date()
             updateWindowSize()
