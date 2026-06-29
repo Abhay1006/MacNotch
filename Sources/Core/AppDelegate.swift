@@ -42,6 +42,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func setupWindows() {
+        print("DEBUG: Setting up windows. Found \(NSScreen.screens.count) screen(s)")
         // Clear existing controllers and close their windows
         for controller in controllers {
             controller.window.close()
@@ -52,6 +53,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         for screen in NSScreen.screens {
             let controller = NotchWindowController(screen: screen, delegate: self)
             controllers.append(controller)
+            print("DEBUG: Created controller for screen: \(screen.frame), window frame: \(controller.window.frame)")
         }
     }
     
@@ -225,6 +227,10 @@ class TouchBarWindow: NSPanel {
     
     override var canBecomeMain: Bool {
         return false
+    }
+    
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        return frameRect
     }
     
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
