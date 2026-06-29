@@ -52,7 +52,10 @@ class MusicManager: ObservableObject {
     }
     
     private func updateArtwork() {
-        if activePlayer == .none || trackTitle == "Not Playing" {
+        let currentTitle = self.trackTitle
+        let currentArtist = self.artist
+        
+        if activePlayer == .none || currentTitle == "Not Playing" || currentTitle.isEmpty {
             self.artworkImage = nil
             return
         }
@@ -87,17 +90,55 @@ class MusicManager: ObservableObject {
                         // Force load raw image data into memory before returning
                         _ = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
                         DispatchQueue.main.async {
-                            self.artworkImage = image
+                            if self.trackTitle == currentTitle && self.artist == currentArtist {
+                                self.artworkImage = image
+                            }
                         }
                         return
                     }
                 }
                 
-                DispatchQueue.main.async {
-                    self.artworkImage = nil
+                // Fallback to iTunes Search API for streamed/URL tracks
+                self.fetchArtworkFromiTunes(title: currentTitle, artist: currentArtist) { [weak self] image in
+                    guard let self = self else { return }
+                    DispatchQueue.main.async {
+                        if self.trackTitle == currentTitle && self.artist == currentArtist {
+                            self.artworkImage = image
+                        }
+                    }
                 }
             }
         }
+    }
+    
+    private func fetchArtworkFromiTunes(title: String, artist: String, completion: @escaping (NSImage?) -> Void) {
+        let term = "\(artist) \(title)"
+        guard let encodedTerm = term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://itunes.apple.com/search?term=\(encodedTerm)&entity=song&limit=1") else {
+            completion(nil)
+            return
+        }
+        
+        let task = URLSession.shared.dataTask(with: url) { data, response, error in
+            guard error == nil, let data = data else {
+                completion(nil)
+                return
+            }
+            do {
+                let searchResult = try JSONDecoder().decode(iTunesSearchResponse.self, from: data)
+                if let artworkUrlString = searchResult.results.first?.artworkUrl100,
+                   let artworkUrl = URL(string: artworkUrlString.replacingOccurrences(of: "100x100", with: "200x200")),
+                   let artworkData = try? Data(contentsOf: artworkUrl),
+                   let image = NSImage(data: artworkData) {
+                    completion(image)
+                } else {
+                    completion(nil)
+                }
+            } catch {
+                completion(nil)
+            }
+        }
+        task.resume()
     }
     
     private func runAppleScript(_ source: String) -> String? {
@@ -195,4 +236,11 @@ class MusicManager: ObservableObject {
             self?.pollMusicStateBackground()
         }
     }
+}
+
+private struct iTunesSearchResponse: Codable {
+    struct Result: Codable {
+        let artworkUrl100: String?
+    }
+    let results: [Result]
 }
