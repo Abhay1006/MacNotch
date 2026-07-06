@@ -131,7 +131,7 @@ struct NotchIslandView: View {
         if !isExpanded {
             // Collapsed size (fits around the notch)
             if zenManager.isActive {
-                return CGSize(width: 240, height: 35)
+                return CGSize(width: 300, height: 35)
             }
             if notificationManager.activeNotification != nil {
                 return CGSize(width: 300, height: 35)
