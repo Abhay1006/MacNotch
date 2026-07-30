@@ -13,6 +13,7 @@ class SystemManager: ObservableObject {
     @Published var ramUsage: Int = 0
     
     let calendarManager = CalendarManager()
+    let obsidianTaskManager = ObsidianTaskManager()
     private let cpuCounter = CPUUsage()
     private var lastVolumeCheck: Date = Date.distantPast
     
@@ -102,6 +103,9 @@ class SystemManager: ObservableObject {
             
             // 5. Calendar (updates internally in background)
             self.calendarManager.fetchNextEvent()
+            
+            // 6. Rescan Obsidian tasks
+            self.obsidianTaskManager.scanTasks()
             
             // Dispatch UI updates to main thread
             DispatchQueue.main.async {

@@ -9,12 +9,14 @@ echo "🔨 Building ${APP_NAME}..."
 
 # Kill previous instances of the app
 echo "🛑 Stopping any running instances of ${APP_NAME}..."
-killall "${APP_NAME}" 2>/dev/null || true
+pkill -9 -f "${APP_NAME}" 2>/dev/null || killall -9 "${APP_NAME}" 2>/dev/null || true
 
 # Compile Swift files
 echo "⚙️ Compiling Swift files..."
+mkdir -p ./scratch/ModuleCache
 swiftc -sdk $(xcrun --show-sdk-path --sdk macosx) \
        -target arm64-apple-macosx14.0 \
+       -module-cache-path ./scratch/ModuleCache \
        -O \
        -o "${APP_NAME}_binary" \
        Sources/Core/main.swift \
@@ -24,6 +26,7 @@ swiftc -sdk $(xcrun --show-sdk-path --sdk macosx) \
        Sources/Managers/MusicManager.swift \
        Sources/Managers/SystemManager.swift \
        Sources/Managers/CalendarManager.swift \
+       Sources/Managers/ObsidianTaskManager.swift \
        Sources/Managers/SportsManager.swift \
        Sources/Managers/QuotesManager.swift
 

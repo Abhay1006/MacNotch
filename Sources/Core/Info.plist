@@ -22,5 +22,7 @@
     <string>MacNotch requires permission to control Apple Music via AppleScript to display and control the currently playing track in the notch widget.</string>
     <key>NSCalendarsUsageDescription</key>
     <string>MacNotch requires calendar access to display your upcoming events and schedule countdowns in the system tab.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>MacNotch requires full calendar access to sync Obsidian tasks to your Apple Calendar.</string>
 </dict>
 </plist>

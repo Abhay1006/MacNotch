@@ -158,7 +158,7 @@ struct NotchIslandView: View {
         case .clipboard:
             return CGSize(width: 380, height: fileShelfManager.files.isEmpty ? 355 : 390)
         case .system:
-            return CGSize(width: 380, height: 170)
+            return CGSize(width: 380, height: 225)
         case .zen:
             return CGSize(width: 380, height: 190)
         case .apps:
@@ -977,21 +977,21 @@ struct NotchIslandView: View {
         .frame(height: 80)
     }
     
-    // MARK: - Calendar & Stats Content
+    // MARK: - Calendar Content
     private var calendarTabContent: some View {
-        HStack(spacing: 20) {
-            // Calendar Event Widget
+        HStack(spacing: 14) {
+            // Apple Calendar Widget
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     Image(systemName: "calendar")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundColor(.pink)
-                    Text("Upcoming Event")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                    Text("Apple Calendar")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundColor(.white.opacity(0.8))
                 }
                 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(systemManager.calendarManager.nextEventTitle)
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .foregroundColor(.white)
@@ -1006,7 +1006,7 @@ struct NotchIslandView: View {
                     }
                 }
                 .padding(8)
-                .frame(width: 160, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.white.opacity(0.04))
                 .cornerRadius(8)
                 .overlay(
@@ -1018,83 +1018,76 @@ struct NotchIslandView: View {
                         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
                     }
                 }
-                .onHover { inside in
-                    if inside {
-                        NSCursor.pointingHand.set()
-                    } else {
-                        NSCursor.arrow.set()
-                    }
-                }
             }
-            .padding(.leading, 16)
-            
+
             Divider()
                 .background(Color.white.opacity(0.08))
                 .frame(height: 60)
-            
-            // CPU & RAM Usage Stack
-            VStack(spacing: 10) {
-                // CPU Progress Bar
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Image(systemName: "cpu")
-                            .font(.system(size: 10))
-                            .foregroundColor(.pink)
-                        Text("CPU")
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .foregroundColor(.white.opacity(0.8))
-                        Spacer()
-                        Text("\(systemManager.cpuUsage)%")
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
-                            .foregroundColor(.white.opacity(0.5))
-                    }
-                    
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(Color.white.opacity(0.1))
-                                .frame(height: 4)
-                            
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(Color.pink)
-                                .frame(width: geo.size.width * CGFloat(Double(systemManager.cpuUsage) / 100.0), height: 4)
-                        }
-                    }
-                    .frame(height: 4)
+
+            // Obsidian Daily Tasks Card
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "note.text")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.purple)
+                    Text("Obsidian Tasks")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundColor(.white.opacity(0.8))
+                    Spacer()
+                    Text("\(systemManager.obsidianTaskManager.pendingTodayCount) due")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundColor(.purple)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.purple.opacity(0.2))
+                        .cornerRadius(4)
                 }
                 
-                // RAM Progress Bar
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Image(systemName: "memorychip")
-                            .font(.system(size: 10))
-                            .foregroundColor(.pink)
-                        Text("RAM")
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .foregroundColor(.white.opacity(0.8))
-                        Spacer()
-                        Text("\(systemManager.ramUsage)%")
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
-                            .foregroundColor(.white.opacity(0.5))
+                    if let topTask = systemManager.obsidianTaskManager.todayTasks.first(where: { !$0.isCompleted }) ?? systemManager.obsidianTaskManager.allTasks.first(where: { !$0.isCompleted }) {
+                        Text("• \(topTask.title)")
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundColor(.white.opacity(0.9))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    } else {
+                        Text("All daily tasks completed!")
+                            .font(.system(size: 10, design: .rounded))
+                            .foregroundColor(.green.opacity(0.8))
                     }
                     
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(Color.white.opacity(0.1))
-                                .frame(height: 4)
-                            
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(Color.pink)
-                                .frame(width: geo.size.width * CGFloat(Double(systemManager.ramUsage) / 100.0), height: 4)
+                    HStack {
+                        Spacer()
+                        Button(action: {
+                            let pending = systemManager.obsidianTaskManager.allTasks.filter { !$0.isCompleted }
+                            systemManager.calendarManager.syncObsidianTasksToAppleCalendar(tasks: pending)
+                        }) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.system(size: 9, weight: .bold))
+                                Text(systemManager.calendarManager.syncStatusMessage.isEmpty ? "Sync" : systemManager.calendarManager.syncStatusMessage)
+                                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color.purple.opacity(0.3))
+                            .foregroundColor(.white)
+                            .cornerRadius(5)
                         }
+                        .buttonStyle(PlainButtonStyle())
                     }
-                    .frame(height: 4)
                 }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white.opacity(0.04))
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.purple.opacity(0.2), lineWidth: 1)
+                )
             }
-            .padding(.trailing, 16)
         }
-        .frame(height: 80)
+        .padding(.horizontal, 16)
     }
     
     // MARK: - Clipboard Content
@@ -1460,95 +1453,162 @@ struct NotchIslandView: View {
 
     // MARK: - System Content
     private var systemTabContent: some View {
-        HStack(spacing: 20) {
-            // Battery Widget
-            VStack(alignment: .center, spacing: 6) {
-                ZStack {
-                    Circle()
-                        .stroke(Color.white.opacity(0.12), lineWidth: 4)
-                        .frame(width: 44, height: 44)
-                    
-                    Circle()
-                        .trim(from: 0.0, to: CGFloat(systemManager.batteryPercentage) / 100.0)
-                        .stroke(
-                            systemManager.isBatteryCharging ? Color.green : (systemManager.batteryPercentage < 20 ? Color.red : Color.pink),
-                            style: StrokeStyle(lineWidth: 4, lineCap: .round)
-                        )
-                        .frame(width: 44, height: 44)
-                        .rotationEffect(.degrees(-90))
-                    
-                    VStack(spacing: 0) {
-                        if systemManager.isBatteryCharging {
-                            Image(systemName: "bolt.fill")
-                                .font(.system(size: 8))
-                                .foregroundColor(.green)
-                        }
-                        Text("\(systemManager.batteryPercentage)%")
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
-                            .foregroundColor(.white)
-                    }
-                }
-                Text("Battery")
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
-                    .foregroundColor(.white.opacity(0.5))
-            }
-            .padding(.leading, 16)
-            
-            Divider()
-                .background(Color.white.opacity(0.08))
-                .frame(height: 50)
-            
-            // Volume and Brightness Sliders Stack
-            VStack(spacing: 12) {
-                // Volume Control
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        Image(systemName: systemManager.systemVolume == 0 ? "speaker.slash.fill" : (systemManager.systemVolume < 33 ? "speaker.wave.1.fill" : (systemManager.systemVolume < 66 ? "speaker.wave.2.fill" : "speaker.wave.3.fill")))
-                            .font(.system(size: 10))
-                            .foregroundColor(.white.opacity(0.7))
+        VStack(spacing: 12) {
+            // Row 1: Battery & Controls
+            HStack(spacing: 16) {
+                // Battery Widget
+                VStack(alignment: .center, spacing: 4) {
+                    ZStack {
+                        Circle()
+                            .stroke(Color.white.opacity(0.12), lineWidth: 3.5)
+                            .frame(width: 38, height: 38)
                         
-                        Text("Volume")
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundColor(.white.opacity(0.8))
-                        Spacer()
-                        Text("\(systemManager.systemVolume)%")
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
-                            .foregroundColor(.white.opacity(0.5))
+                        Circle()
+                            .trim(from: 0.0, to: CGFloat(systemManager.batteryPercentage) / 100.0)
+                            .stroke(
+                                systemManager.isBatteryCharging ? Color.green : (systemManager.batteryPercentage < 20 ? Color.red : Color.pink),
+                                style: StrokeStyle(lineWidth: 3.5, lineCap: .round)
+                            )
+                            .frame(width: 38, height: 38)
+                            .rotationEffect(.degrees(-90))
+                        
+                        VStack(spacing: 0) {
+                            if systemManager.isBatteryCharging {
+                                Image(systemName: "bolt.fill")
+                                    .font(.system(size: 7))
+                                    .foregroundColor(.green)
+                            }
+                            Text("\(systemManager.batteryPercentage)%")
+                                .font(.system(size: 8, weight: .bold, design: .rounded))
+                                .foregroundColor(.white)
+                        }
                     }
-                    
-                    Slider(value: Binding(
-                        get: { Double(systemManager.systemVolume) },
-                        set: { systemManager.setVolume(Int($0)) }
-                    ), in: 0...100)
-                    .accentColor(.pink)
+                    Text("Battery")
+                        .font(.system(size: 8, weight: .medium, design: .rounded))
+                        .foregroundColor(.white.opacity(0.5))
                 }
                 
-                // Brightness Control
+                Divider()
+                    .background(Color.white.opacity(0.08))
+                    .frame(height: 40)
+                
+                // Volume and Brightness Sliders Stack
+                VStack(spacing: 8) {
+                    // Volume Control
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Image(systemName: systemManager.systemVolume == 0 ? "speaker.slash.fill" : (systemManager.systemVolume < 33 ? "speaker.wave.1.fill" : (systemManager.systemVolume < 66 ? "speaker.wave.2.fill" : "speaker.wave.3.fill")))
+                                .font(.system(size: 9))
+                                .foregroundColor(.white.opacity(0.7))
+                            
+                            Text("Volume")
+                                .font(.system(size: 9, weight: .medium, design: .rounded))
+                                .foregroundColor(.white.opacity(0.8))
+                            Spacer()
+                            Text("\(systemManager.systemVolume)%")
+                                .font(.system(size: 8, weight: .bold, design: .rounded))
+                                .foregroundColor(.white.opacity(0.5))
+                        }
+                        
+                        Slider(value: Binding(
+                            get: { Double(systemManager.systemVolume) },
+                            set: { systemManager.setVolume(Int($0)) }
+                        ), in: 0...100)
+                        .accentColor(.pink)
+                    }
+                    
+                    // Brightness Control
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Image(systemName: systemManager.systemBrightness < 33 ? "sun.min.fill" : (systemManager.systemBrightness < 66 ? "sun.layout.fill" : "sun.max.fill"))
+                                .font(.system(size: 9))
+                                .foregroundColor(.white.opacity(0.7))
+                            
+                            Text("Brightness")
+                                .font(.system(size: 9, weight: .medium, design: .rounded))
+                                .foregroundColor(.white.opacity(0.8))
+                            Spacer()
+                            Text("\(systemManager.systemBrightness)%")
+                                .font(.system(size: 8, weight: .bold, design: .rounded))
+                                .foregroundColor(.white.opacity(0.5))
+                        }
+                        
+                        Slider(value: Binding(
+                            get: { Double(systemManager.systemBrightness) },
+                            set: { systemManager.setBrightness(Int($0)) }
+                        ), in: 0...100)
+                        .accentColor(.pink)
+                    }
+                }
+            }
+
+            Divider()
+                .background(Color.white.opacity(0.08))
+                .padding(.vertical, 2)
+
+            // Row 2: Realtime CPU & RAM Usage Stack
+            HStack(spacing: 16) {
+                // CPU Progress Bar
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
-                        Image(systemName: systemManager.systemBrightness < 33 ? "sun.min.fill" : (systemManager.systemBrightness < 66 ? "sun.layout.fill" : "sun.max.fill"))
-                            .font(.system(size: 10))
-                            .foregroundColor(.white.opacity(0.7))
-                        
-                        Text("Brightness")
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                        Image(systemName: "cpu")
+                            .font(.system(size: 9))
+                            .foregroundColor(.pink)
+                        Text("CPU")
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
                             .foregroundColor(.white.opacity(0.8))
                         Spacer()
-                        Text("\(systemManager.systemBrightness)%")
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                        Text("\(systemManager.cpuUsage)%")
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
                             .foregroundColor(.white.opacity(0.5))
                     }
                     
-                    Slider(value: Binding(
-                        get: { Double(systemManager.systemBrightness) },
-                        set: { systemManager.setBrightness(Int($0)) }
-                    ), in: 0...100)
-                    .accentColor(.pink)
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color.white.opacity(0.1))
+                                .frame(height: 4)
+                            
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color.pink)
+                                .frame(width: geo.size.width * CGFloat(Double(systemManager.cpuUsage) / 100.0), height: 4)
+                        }
+                    }
+                    .frame(height: 4)
+                }
+                
+                // RAM Progress Bar
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Image(systemName: "memorychip")
+                            .font(.system(size: 9))
+                            .foregroundColor(.pink)
+                        Text("RAM")
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .foregroundColor(.white.opacity(0.8))
+                        Spacer()
+                        Text("\(systemManager.ramUsage)%")
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color.white.opacity(0.1))
+                                .frame(height: 4)
+                            
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color.pink)
+                                .frame(width: geo.size.width * CGFloat(Double(systemManager.ramUsage) / 100.0), height: 4)
+                        }
+                    }
+                    .frame(height: 4)
                 }
             }
-            .padding(.trailing, 16)
         }
-        .frame(height: 80)
+        .padding(.top, 10)
+        .padding(.horizontal, 16)
     }
 }
 

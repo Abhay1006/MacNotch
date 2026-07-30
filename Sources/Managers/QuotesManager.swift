@@ -54,7 +54,8 @@ class QuotesManager: ObservableObject {
         "Nature has no justice",
         "You never teach swimming to a drowning person",
         "Cage is cage be it made up of iron or gold",
-        "How can you be late in life when it’s your life"
+        "How can you be late in life when it’s your life",
+        "Kill the monster before it starts telling you his story, otherwise you will start loving him"
     ]
     
     init() {
@@ -62,11 +63,37 @@ class QuotesManager: ObservableObject {
     }
     
     func selectNewQuote() {
+        var availableQuotes = quotes
+        
+        // Dynamically load quotes from Obsidian Vault "Quotes and ideas.md" if available
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let obsidianQuotesPath = "\(home)/Documents/Obsidian Vault/Quotes and ideas.md"
+        
+        if let content = try? String(contentsOfFile: obsidianQuotesPath, encoding: .utf8) {
+            let lines = content.components(separatedBy: .newlines)
+            var obsidianQuotes: [String] = []
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                var qText = ""
+                if trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]") {
+                    qText = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                } else if trimmed.hasPrefix("- ") {
+                    qText = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                }
+                if !qText.isEmpty && qText.count > 3 {
+                    obsidianQuotes.append(qText)
+                }
+            }
+            if !obsidianQuotes.isEmpty {
+                availableQuotes = obsidianQuotes
+            }
+        }
+        
         // Prevent showing the exact same quote twice in a row if there are multiple quotes
-        var newQuote = quotes.randomElement() ?? "Stay motivated!"
-        if quotes.count > 1 {
+        var newQuote = availableQuotes.randomElement() ?? "Stay motivated!"
+        if availableQuotes.count > 1 {
             while newQuote == currentQuote {
-                newQuote = quotes.randomElement() ?? "Stay motivated!"
+                newQuote = availableQuotes.randomElement() ?? "Stay motivated!"
             }
         }
         currentQuote = newQuote
