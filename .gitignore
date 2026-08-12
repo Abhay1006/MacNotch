@@ -4,3 +4,6 @@ MacNotch_binary
 *.swp
 *.o
 scratch/
+
+# Local-only engineering notes
+IMPROVEMENTS.md

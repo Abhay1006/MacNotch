@@ -1,72 +1,52 @@
 import Foundation
 import Combine
 
-struct SportMatch: Identifiable, Equatable {
-    let id: String
-    let leagueId: String
-    let leagueName: String
-    let homeTeam: String
-    let awayTeam: String
-    let homeAbbr: String
-    let awayAbbr: String
-    let homeScore: String
-    let awayScore: String
-    let statusState: String // "pre", "in", "post"
-    let statusDetail: String // e.g. "72'", "FT", "19:30"
-    let homeLogo: String?
-    let awayLogo: String?
-    let dateString: String
-    
-    var isLive: Bool {
-        return statusState == "in"
-    }
-    
-    var isFinished: Bool {
-        return statusState == "post"
-    }
-    
-    var isScheduled: Bool {
-        return statusState == "pre"
-    }
-    
-    var timeUntilKickoff: TimeInterval? {
-        guard !dateString.isEmpty else { return nil }
-        let isoFormatter = ISO8601DateFormatter()
-        var dateObj = isoFormatter.date(from: dateString)
-        
-        if dateObj == nil {
-            let df = DateFormatter()
-            df.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
-            df.timeZone = TimeZone(secondsFromGMT: 0)
-            dateObj = df.date(from: dateString)
-        }
-        
-        if dateObj == nil {
-            let df = DateFormatter()
-            df.dateFormat = "yyyy-MM-dd'T'HH:mmZ"
-            dateObj = df.date(from: dateString)
-        }
-        
-        guard let date = dateObj else { return nil }
-        return date.timeIntervalSinceNow
-    }
-}
-
 class SportsManager: ObservableObject {
     @Published var favoriteTeam: String
     @Published var selectedLeague: String
-    
+
     @Published var leagueMatches: [SportMatch] = []
     @Published var favoriteTeamMatch: SportMatch? = nil
     @Published var isFetching = false
-    
+
     @Published var searchUpcomingMatches: [SportMatch] = []
     @Published var searchLastGamePlayed: SportMatch? = nil
-    
+
     private var timer: Timer?
-    private var currentTimerInterval: TimeInterval = 60.0
+    private var currentTimerInterval: TimeInterval = 0
     private var cancellables = Set<AnyCancellable>()
-    
+
+    /// Whether the Sports tab is on screen. Drives the slow idle refresh — without it
+    /// the default (no favourite team) view never updated after the first load.
+    private var isTabVisible = false
+
+    /// Per-league results.
+    ///
+    /// The old code appended into one shared array from eight concurrent `URLSession`
+    /// completion handlers with no synchronization. `Array` is not thread-safe and
+    /// concurrent appends can corrupt memory. Results are now written into a
+    /// lock-guarded dictionary keyed by league, which also lets a poll refresh a
+    /// single league without discarding the others.
+    private var matchesByLeague: [String: [SportMatch]] = [:]
+    private let cacheLock = NSLock()
+
+    /// When the wide multi-league sweep last ran.
+    private var lastFullSweep: Date = .distantPast
+    private let fullSweepInterval: TimeInterval = 600
+
+    private static let dateRangeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd"
+        return formatter
+    }()
+
+    /// Leagues swept when looking for a favourite team that may play anywhere.
+    private static let fallbackLeagues = [
+        "eng.1", "uefa.champions", "fifa.world", "uefa.euro",
+        "conmebol.america", "uefa.nations", "fifa.friendly"
+    ]
+
     let leaguesList = [
         ("eng.1", "English Premier League"),
         ("uefa.champions", "UEFA Champions League"),
@@ -83,11 +63,11 @@ class SportsManager: ObservableObject {
         ("uefa.nations", "UEFA Nations League"),
         ("fifa.friendly", "International Friendlies")
     ]
-    
+
     init() {
         self.favoriteTeam = UserDefaults.standard.string(forKey: "FavoriteTeam") ?? ""
         self.selectedLeague = UserDefaults.standard.string(forKey: "SelectedLeague") ?? "eng.1"
-        
+
         $favoriteTeam
             .dropFirst()
             .debounce(for: .milliseconds(800), scheduler: RunLoop.main)
@@ -96,7 +76,7 @@ class SportsManager: ObservableObject {
                 self?.fetchScores()
             }
             .store(in: &cancellables)
-            
+
         $selectedLeague
             .dropFirst()
             .sink { [weak self] league in
@@ -104,164 +84,188 @@ class SportsManager: ObservableObject {
                 self?.fetchScores()
             }
             .store(in: &cancellables)
-            
+
         fetchScores()
-        startTimer()
     }
-    
+
     deinit {
         timer?.invalidate()
     }
-    
-    func startTimer() {
-        var shouldPoll = false
-        var interval = 60.0
-        
+
+    /// Called by the view when the Sports tab is shown or hidden.
+    func setTabVisible(_ visible: Bool) {
+        guard visible != isTabVisible else { return }
+        isTabVisible = visible
+        if visible { fetchScores() }
+        scheduleNextPoll()
+    }
+
+    // MARK: - Polling cadence
+
+    /// Decide whether to poll and how often.
+    ///
+    /// The old version fetched all eight leagues on every tick — 8 requests every 30s
+    /// during a live match, each `limit=200` over a 120-day window. It also stopped
+    /// polling entirely when no favourite team was set, so league mode went stale.
+    private func scheduleNextPoll() {
+        var interval: TimeInterval = 0
+
         if let match = favoriteTeamMatch {
             if match.isLive {
-                shouldPoll = true
-                interval = 30.0
-            } else if match.isScheduled {
-                if let kickoff = match.timeUntilKickoff {
-                    // Poll if starting in <= 30 minutes
-                    if kickoff <= 1800 {
-                        shouldPoll = true
-                        interval = 60.0
-                    }
-                }
-            } else if match.isFinished {
-                // Do not poll anymore since results are done/final
-                shouldPoll = false
+                interval = 30
+            } else if match.isScheduled, let kickoff = match.timeUntilKickoff, kickoff <= 1800 {
+                interval = 60
+            } else if isTabVisible {
+                interval = 180
             }
+        } else if isTabVisible {
+            // Nothing to track, but the user is looking at the tab.
+            interval = 120
         }
-        
-        if !shouldPoll {
-            if timer != nil {
-                timer?.invalidate()
-                timer = nil
-            }
+
+        guard interval > 0 else {
+            timer?.invalidate()
+            timer = nil
+            currentTimerInterval = 0
             return
         }
-        
-        // If already running with the correct interval, do nothing
-        if timer != nil && currentTimerInterval == interval {
-            return
-        }
-        
+
+        // Already running at the right cadence.
+        if timer != nil && currentTimerInterval == interval { return }
+
         timer?.invalidate()
         currentTimerInterval = interval
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             self?.fetchScores()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
-    
-    private func getDateRangeString() -> String {
+
+    private func dateRangeString() -> String {
         let calendar = Calendar.current
         let now = Date()
         guard let startDate = calendar.date(byAdding: .day, value: -30, to: now),
               let endDate = calendar.date(byAdding: .day, value: 90, to: now) else {
             return ""
         }
-        let df = DateFormatter()
-        df.dateFormat = "yyyyMMdd"
-        return "\(df.string(from: startDate))-\(df.string(from: endDate))"
+        let formatter = SportsManager.dateRangeFormatter
+        return "\(formatter.string(from: startDate))-\(formatter.string(from: endDate))"
     }
-    
+
+    // MARK: - Fetching
+
     func fetchScores() {
         guard !isFetching else { return }
         isFetching = true
-        
-        // Fetch the user's selected league, plus club and national fallback leagues
-        let leaguesToFetch = Array(Set([
-            selectedLeague,
-            "eng.1",
-            "uefa.champions",
-            "fifa.world",
-            "uefa.euro",
-            "conmebol.america",
-            "uefa.nations",
-            "fifa.friendly"
-        ]))
-        
-        var allMatches: [SportMatch] = []
+
+        let leagues = leaguesToFetch()
+        if leagues.count > 1 { lastFullSweep = Date() }
+
+        let datesParam = favoriteTeam.isEmpty ? nil : dateRangeString()
         let group = DispatchGroup()
-        let datesParam = favoriteTeam.isEmpty ? nil : getDateRangeString()
-        
-        for league in leaguesToFetch {
+
+        for league in leagues {
             group.enter()
-            fetchLeagueMatches(league: league, dates: datesParam) { matches in
-                if let matches = matches {
-                    allMatches.append(contentsOf: matches)
+            fetchLeagueMatches(league: league, dates: datesParam) { [weak self] matches in
+                if let matches = matches, let self = self {
+                    // Guarded: these callbacks run concurrently on URLSession's queue.
+                    self.cacheLock.lock()
+                    self.matchesByLeague[league] = matches
+                    self.cacheLock.unlock()
                 }
                 group.leave()
             }
         }
-        
+
         group.notify(queue: .main) { [weak self] in
             guard let self = self else { return }
             self.isFetching = false
-            
-            // Filter matches for the selected league
-            self.leagueMatches = allMatches.filter { $0.leagueId == self.selectedLeague }
-            
-            // Find favorite team match if favorite team is set
-            if !self.favoriteTeam.isEmpty {
-                let lowerFav = self.favoriteTeam.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                
-                // 1. Get all matches involving favorite team
-                let matching = allMatches.filter { match in
-                    match.homeTeam.lowercased().contains(lowerFav) || 
-                    match.awayTeam.lowercased().contains(lowerFav) ||
-                    match.homeAbbr.lowercased() == lowerFav ||
-                    match.awayAbbr.lowercased() == lowerFav
-                }
-                
-                // 2. Separate them by state
-                let liveMatches = matching.filter { $0.isLive }
-                let scheduledMatches = matching.filter { $0.isScheduled }
-                let finishedMatches = matching.filter { $0.isFinished }
-                
-                let recentFinished = finishedMatches.filter { match in
-                    if let t = match.timeUntilKickoff { return t > -86400 }
-                    return false
-                }.sorted { $0.dateString > $1.dateString }
-                
-                // 3. Deterministically choose the best match:
-                // - First preference: Live match
-                // - Second preference: Recently finished match (< 24 hours)
-                // - Third preference: Scheduled match closest to today (earliest dateString)
-                // - Fourth preference: Finished match that was most recent (latest dateString)
-                if let live = liveMatches.first {
-                    self.favoriteTeamMatch = live
-                } else if let recent = recentFinished.first {
-                    self.favoriteTeamMatch = recent
-                } else if !scheduledMatches.isEmpty {
-                    let sortedScheduled = scheduledMatches.sorted { $0.dateString < $1.dateString }
-                    self.favoriteTeamMatch = sortedScheduled.first
-                } else if !finishedMatches.isEmpty {
-                    let sortedFinished = finishedMatches.sorted { $0.dateString > $1.dateString }
-                    self.favoriteTeamMatch = sortedFinished.first
-                } else {
-                    self.favoriteTeamMatch = nil
-                }
-                
-                // 4. Populate search properties for UI
-                self.searchLastGamePlayed = finishedMatches.sorted { $0.dateString > $1.dateString }.first
-                
-                let searchLive = matching.filter { $0.isLive && $0.leagueId == self.selectedLeague }
-                let searchUpcoming = matching.filter { $0.isScheduled && $0.leagueId == self.selectedLeague }
-                self.searchUpcomingMatches = searchLive + searchUpcoming.sorted { $0.dateString < $1.dateString }
-            } else {
-                self.favoriteTeamMatch = nil
-                self.searchLastGamePlayed = nil
-                self.searchUpcomingMatches = []
-            }
-            
-            // Dynamically adjust polling speed/state based on match timing
-            self.startTimer()
+            self.recomputeDerivedState()
+            self.scheduleNextPoll()
         }
     }
-    
+
+    /// Which leagues this poll should refresh.
+    ///
+    /// While a favourite match is live we only need that one league; the wide sweep
+    /// that hunts for the team's *next* fixture can run every ten minutes instead.
+    private func leaguesToFetch() -> [String] {
+        if let match = favoriteTeamMatch,
+           match.isLive,
+           Date().timeIntervalSince(lastFullSweep) < fullSweepInterval {
+            return Array(Set([match.leagueId, selectedLeague]))
+        }
+
+        if favoriteTeam.isEmpty {
+            // No team to hunt for — the selected league is all that's displayed.
+            return [selectedLeague]
+        }
+
+        return Array(Set([selectedLeague] + SportsManager.fallbackLeagues))
+    }
+
+    private func allCachedMatches() -> [SportMatch] {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return matchesByLeague.values.flatMap { $0 }
+    }
+
+    private func recomputeDerivedState() {
+        let allMatches = allCachedMatches()
+
+        self.leagueMatches = allMatches
+            .filter { $0.leagueId == self.selectedLeague }
+            .sorted { $0.sortDate < $1.sortDate }
+
+        guard !favoriteTeam.isEmpty else {
+            self.favoriteTeamMatch = nil
+            self.searchLastGamePlayed = nil
+            self.searchUpcomingMatches = []
+            return
+        }
+
+        let lowerFav = favoriteTeam.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 1. All matches involving the favourite team
+        let matching = allMatches.filter { match in
+            match.homeTeam.lowercased().contains(lowerFav) ||
+            match.awayTeam.lowercased().contains(lowerFav) ||
+            match.homeAbbr.lowercased() == lowerFav ||
+            match.awayAbbr.lowercased() == lowerFav
+        }
+
+        // 2. Separate by state
+        let liveMatches = matching.filter { $0.isLive }
+        let scheduledMatches = matching.filter { $0.isScheduled }
+        let finishedMatches = matching.filter { $0.isFinished }
+
+        let recentFinished = finishedMatches
+            .filter { ($0.timeUntilKickoff ?? .leastNormalMagnitude) > -86400 }
+            .sorted { $0.sortDate > $1.sortDate }
+
+        // 3. Pick the best match to spotlight:
+        //    live → finished in the last 24h → next scheduled → most recent finished
+        if let live = liveMatches.first {
+            self.favoriteTeamMatch = live
+        } else if let recent = recentFinished.first {
+            self.favoriteTeamMatch = recent
+        } else if let nextUp = scheduledMatches.sorted(by: { $0.sortDate < $1.sortDate }).first {
+            self.favoriteTeamMatch = nextUp
+        } else {
+            self.favoriteTeamMatch = finishedMatches.sorted { $0.sortDate > $1.sortDate }.first
+        }
+
+        // 4. Populate search properties for UI
+        self.searchLastGamePlayed = finishedMatches.sorted { $0.sortDate > $1.sortDate }.first
+
+        let searchLive = matching.filter { $0.isLive && $0.leagueId == self.selectedLeague }
+        let searchUpcoming = matching
+            .filter { $0.isScheduled && $0.leagueId == self.selectedLeague }
+            .sorted { $0.sortDate < $1.sortDate }
+        self.searchUpcomingMatches = searchLive + searchUpcoming
+    }
+
     private func fetchLeagueMatches(league: String, dates: String? = nil, completion: @escaping ([SportMatch]?) -> Void) {
         var urlString = "https://site.api.espn.com/apis/site/v2/sports/soccer/\(league)/scoreboard?limit=200"
         if let dates = dates {
@@ -271,127 +275,99 @@ class SportsManager: ObservableObject {
             completion(nil)
             return
         }
-        
+
         var request = URLRequest(url: url)
+        request.timeoutInterval = 15
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
-        
-        URLSession.shared.dataTask(with: request) { data, response, error in
+
+        URLSession.shared.dataTask(with: request) { data, _, error in
             guard let data = data, error == nil else {
+                if let error = error {
+                    Log.sports.debug("Fetch failed for \(league): \(error.localizedDescription)")
+                }
                 completion(nil)
                 return
             }
-            
-            var parsedMatches: [SportMatch] = []
-            if let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
-               let events = json["events"] as? [[String: Any]] {
-                
-                let leagueName = (json["leagues"] as? [[String: Any]])?.first?["name"] as? String ?? league
-                
-                for event in events {
-                    let id = event["id"] as? String ?? UUID().uuidString
-                    let dateString = event["date"] as? String ?? ""
-                    let statusObj = event["status"] as? [String: Any]
-                    let statusTypeObj = statusObj?["type"] as? [String: Any]
-                    let statusState = statusTypeObj?["state"] as? String ?? "pre"
-                    var statusDetail = statusTypeObj?["detail"] as? String ?? ""
-                    
-                    if statusState == "pre" && !dateString.isEmpty {
-                        if let formattedTime = SportsManager.formatMatchTime(from: dateString) {
-                            statusDetail = formattedTime
-                        }
-                    }
-                    
-                    if let competitions = event["competitions"] as? [[String: Any]],
-                       let competitors = competitions.first?["competitors"] as? [[String: Any]] {
-                        
-                        var homeTeamName = ""
-                        var awayTeamName = ""
-                        var homeAbbrValue = ""
-                        var awayAbbrValue = ""
-                        var homeScoreValue = "0"
-                        var awayScoreValue = "0"
-                        var homeLogoUrl: String? = nil
-                        var awayLogoUrl: String? = nil
-                        
-                        for competitor in competitors {
-                            let homeAway = competitor["homeAway"] as? String ?? ""
-                            let team = competitor["team"] as? [String: Any]
-                            let teamName = team?["name"] as? String ?? ""
-                            let abbreviation = team?["abbreviation"] as? String ?? String(teamName.prefix(3)).uppercased()
-                            let score = competitor["score"] as? String ?? "0"
-                            let logo = team?["logo"] as? String
-                            
-                            if homeAway == "home" {
-                                homeTeamName = teamName
-                                homeAbbrValue = abbreviation
-                                homeScoreValue = score
-                                homeLogoUrl = logo
-                            } else {
-                                awayTeamName = teamName
-                                awayAbbrValue = abbreviation
-                                awayScoreValue = score
-                                awayLogoUrl = logo
-                            }
-                        }
-                        
-                        let match = SportMatch(
-                            id: id,
-                            leagueId: league,
-                            leagueName: leagueName,
-                            homeTeam: homeTeamName,
-                            awayTeam: awayTeamName,
-                            homeAbbr: homeAbbrValue,
-                            awayAbbr: awayAbbrValue,
-                            homeScore: homeScoreValue,
-                            awayScore: awayScoreValue,
-                            statusState: statusState,
-                            statusDetail: statusDetail,
-                            homeLogo: homeLogoUrl,
-                            awayLogo: awayLogoUrl,
-                            dateString: dateString
-                        )
-                        parsedMatches.append(match)
-                    }
-                }
-            }
-            completion(parsedMatches)
+            completion(SportsManager.parseScoreboard(data: data, league: league))
         }.resume()
     }
-    
-    static func formatMatchTime(from dateString: String) -> String? {
-        guard !dateString.isEmpty else { return nil }
-        
-        let isoFormatter = ISO8601DateFormatter()
-        var dateObj = isoFormatter.date(from: dateString)
-        
-        if dateObj == nil {
-            let df = DateFormatter()
-            df.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
-            df.timeZone = TimeZone(secondsFromGMT: 0)
-            dateObj = df.date(from: dateString)
+
+    private static func parseScoreboard(data: Data, league: String) -> [SportMatch] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let events = json["events"] as? [[String: Any]] else {
+            return []
         }
-        
-        if dateObj == nil {
-            let df = DateFormatter()
-            df.dateFormat = "yyyy-MM-dd'T'HH:mmZ"
-            dateObj = df.date(from: dateString)
+
+        let leagueName = (json["leagues"] as? [[String: Any]])?.first?["name"] as? String ?? league
+        var parsedMatches: [SportMatch] = []
+
+        for event in events {
+            let id = event["id"] as? String ?? UUID().uuidString
+            let dateString = event["date"] as? String ?? ""
+            let statusObj = event["status"] as? [String: Any]
+            let statusTypeObj = statusObj?["type"] as? [String: Any]
+            let statusState = statusTypeObj?["state"] as? String ?? "pre"
+            var statusDetail = statusTypeObj?["detail"] as? String ?? ""
+
+            let date = SportMatch.parseDate(from: dateString)
+
+            if statusState == "pre", let date = date {
+                statusDetail = SportMatch.formatMatchTime(date)
+            }
+
+            guard let competitions = event["competitions"] as? [[String: Any]],
+                  let competitors = competitions.first?["competitors"] as? [[String: Any]] else {
+                continue
+            }
+
+            var homeTeamName = ""
+            var awayTeamName = ""
+            var homeAbbrValue = ""
+            var awayAbbrValue = ""
+            var homeScoreValue = "0"
+            var awayScoreValue = "0"
+            var homeLogoUrl: String? = nil
+            var awayLogoUrl: String? = nil
+
+            for competitor in competitors {
+                let homeAway = competitor["homeAway"] as? String ?? ""
+                let team = competitor["team"] as? [String: Any]
+                let teamName = team?["name"] as? String ?? ""
+                let abbreviation = team?["abbreviation"] as? String ?? String(teamName.prefix(3)).uppercased()
+                let score = competitor["score"] as? String ?? "0"
+                let logo = team?["logo"] as? String
+
+                if homeAway == "home" {
+                    homeTeamName = teamName
+                    homeAbbrValue = abbreviation
+                    homeScoreValue = score
+                    homeLogoUrl = logo
+                } else {
+                    awayTeamName = teamName
+                    awayAbbrValue = abbreviation
+                    awayScoreValue = score
+                    awayLogoUrl = logo
+                }
+            }
+
+            parsedMatches.append(SportMatch(
+                id: id,
+                leagueId: league,
+                leagueName: leagueName,
+                homeTeam: homeTeamName,
+                awayTeam: awayTeamName,
+                homeAbbr: homeAbbrValue,
+                awayAbbr: awayAbbrValue,
+                homeScore: homeScoreValue,
+                awayScore: awayScoreValue,
+                statusState: statusState,
+                statusDetail: statusDetail,
+                homeLogo: homeLogoUrl,
+                awayLogo: awayLogoUrl,
+                date: date
+            ))
         }
-        
-        guard let date = dateObj else { return nil }
-        
-        let outputFormatter = DateFormatter()
-        outputFormatter.timeZone = TimeZone.current // Automatically adapts to user's system timezone (IST)
-        
-        let calendar = Calendar.current
-        if calendar.isDateInToday(date) {
-            outputFormatter.dateFormat = "HH:mm"
-            return "Today \(outputFormatter.string(from: date))"
-        } else if calendar.isDateInTomorrow(date) {
-            outputFormatter.dateFormat = "HH:mm"
-            return "Tomorrow \(outputFormatter.string(from: date))"
-        } else {
-            outputFormatter.dateFormat = "d MMM, HH:mm"
-            return outputFormatter.string(from: date)
-        }
+
+        return parsedMatches
     }
 }

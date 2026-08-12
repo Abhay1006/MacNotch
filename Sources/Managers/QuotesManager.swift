@@ -3,8 +3,16 @@ import Combine
 
 class QuotesManager: ObservableObject {
     @Published var currentQuote: String = ""
-    
-    private let quotes = [
+
+    /// Quotes loaded from the user's Obsidian note, if it exists. Cached so switching
+    /// to the Quotes tab doesn't re-read and re-parse the whole file from disk on the
+    /// main thread every time.
+    private var vaultQuotes: [String] = []
+    private var lastLoad: Date = .distantPast
+    private let reloadInterval: TimeInterval = 300
+    private let loadQueue = DispatchQueue(label: "com.abhay.MacNotch.quotes", qos: .utility)
+
+    private let builtInQuotes = [
         "It gets easier, if you do it every day it gets easier every day, the hard part is to do it every day.",
         "Youngest you will ever be is today.",
         "Don't try to surpass your limits but try to push them higher.",
@@ -57,22 +65,40 @@ class QuotesManager: ObservableObject {
         "How can you be late in life when it’s your life",
         "Kill the monster before it starts telling you his story, otherwise you will start loving him"
     ]
-    
+
     init() {
+        loadVaultQuotesIfStale()
         selectNewQuote()
     }
-    
+
     func selectNewQuote() {
-        var availableQuotes = quotes
-        
-        // Dynamically load quotes from Obsidian Vault "Quotes and ideas.md" if available
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let obsidianQuotesPath = "\(home)/Documents/Obsidian Vault/Quotes and ideas.md"
-        
-        if let content = try? String(contentsOfFile: obsidianQuotesPath, encoding: .utf8) {
-            let lines = content.components(separatedBy: .newlines)
-            var obsidianQuotes: [String] = []
-            for line in lines {
+        loadVaultQuotesIfStale()
+
+        let availableQuotes = vaultQuotes.isEmpty ? builtInQuotes : vaultQuotes
+
+        // Pick from the quotes that aren't the current one.
+        //
+        // The old version looped `while newQuote == currentQuote` guarded only by
+        // `count > 1` — but a count above one does not imply the entries are *distinct*.
+        // A quotes file with repeated lines spun the main thread forever.
+        let candidates = availableQuotes.filter { $0 != currentQuote }
+        currentQuote = candidates.randomElement()
+            ?? availableQuotes.randomElement()
+            ?? "Stay motivated!"
+    }
+
+    /// Read the vault quotes note off the main thread, at most once per `reloadInterval`.
+    private func loadVaultQuotesIfStale() {
+        guard Date().timeIntervalSince(lastLoad) > reloadInterval else { return }
+        lastLoad = Date()
+
+        let path = Preferences.shared.quotesFilePath
+        loadQueue.async { [weak self] in
+            guard let self = self else { return }
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+
+            var parsed: [String] = []
+            for line in content.components(separatedBy: .newlines) {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 var qText = ""
                 if trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]") {
@@ -80,22 +106,13 @@ class QuotesManager: ObservableObject {
                 } else if trimmed.hasPrefix("- ") {
                     qText = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
                 }
-                if !qText.isEmpty && qText.count > 3 {
-                    obsidianQuotes.append(qText)
+                if qText.count > 3 {
+                    parsed.append(qText)
                 }
             }
-            if !obsidianQuotes.isEmpty {
-                availableQuotes = obsidianQuotes
-            }
+
+            guard !parsed.isEmpty else { return }
+            DispatchQueue.main.async { self.vaultQuotes = parsed }
         }
-        
-        // Prevent showing the exact same quote twice in a row if there are multiple quotes
-        var newQuote = availableQuotes.randomElement() ?? "Stay motivated!"
-        if availableQuotes.count > 1 {
-            while newQuote == currentQuote {
-                newQuote = availableQuotes.randomElement() ?? "Stay motivated!"
-            }
-        }
-        currentQuote = newQuote
     }
 }

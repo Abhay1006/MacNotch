@@ -1,110 +1,140 @@
-# MacNotch - macOS Dynamic Island
+# MacNotch — macOS Dynamic Island
 
-MacNotch is a native macOS application built with Swift and SwiftUI that brings a fluid, interactive **Dynamic Island** (like iPhone) to your MacBook's camera notch area. It is fully optimized for Apple Silicon (M1/M2/M3/M4) and Intel Macs, running as a lightweight, borderless accessory panel.
+MacNotch is a native macOS app built with Swift and SwiftUI that turns your MacBook's camera
+notch into an interactive Dynamic Island. It runs as a lightweight, borderless accessory panel
+— no Dock icon, no Cmd-Tab entry.
 
----
-
-## ✨ Features by Tab
-
-MacNotch organizes its interactive widgets into 7 responsive tabs aligned along the top bar.
-
-### 1. 🎵 Music Controller (`music.note`)
-* **Apple Music Integration**: Automatically monitors playback status, track names, artists, and album artwork using AppleScript.
-* **Playback Controls**: Interactive buttons to Play/Pause, Skip Next, and Skip Previous.
-* **Audio Visualizer**: A pulsing micro-animation visualizer that dances when music is active.
-* **Dynamic Sizing**: Automatically drops to a compact `240px` capsule when collapsed to hug the notch.
-
-### 2. 📅 Calendar Widget (`calendar`)
-* **EventKit Integration**: Integrates directly with Apple Calendar (with permission handling).
-* **Next Event Tracker**: Displays the title and localized start time of your next scheduled event within 24 hours.
-
-### 3. 🏆 Live Sports Scoreboard (`trophy`)
-* **ESPN Soccer API**: Pulls live soccer matches and scores across major global leagues (Premier League, La Liga, Serie A, Champions League, FIFA World Cup, etc.).
-* **Favorite Team Tracking**: Specify a favorite team via the interface. The app automatically prioritizes tracking their live matches, falls back to the closest upcoming match, or shows the most recent finished match.
-* **Local Timezone Conversion**: Automatically converts and formats kick-off times to your local timezone (e.g. IST).
-* **Dynamic Polling Rate**: Intelligently updates scoreboards every 30 seconds if a favorite team's match is live, and scales back to 60 seconds when idle to conserve battery and network.
-* **Camera Notch Clearance Sizing**: When sports tracking is active, the collapsed notch expands to `300px` (instead of the standard `240px`). This places the team logos, abbreviations, and scores at the absolute left and right ends, keeping them fully visible around the camera notch.
-* **Dynamic Island Notifications**: Sends overlay banners inside the Island for match events: Kick-off, Goals, Half Time, and Full Time.
-
-### 4. 📋 Clipboard History & File Shelf (`doc.on.clipboard`)
-* **Background Monitoring**: Automatically monitors system copy pasteboard (`NSPasteboard`) and registers copied text.
-* **History Capacity**: Stores a rolling history of up to 15 copied items.
-* **Search & Filter**: Includes an integrated text search box to quickly filter through history items.
-* **Instant Re-Copy**: Click any history item to instantly copy it back to your active pasteboard with visual checkmark feedback.
-* **Quick File Shelf**: Drag and drop files or folders directly onto the island to place them in a fast-access shelf for quick reference or drag-out actions.
-
-### 5. ⚙️ System Control & Metrics (`slider.horizontal.3`)
-* **Battery Widget**: Circular live widget displaying battery percentage, coloring dynamically (green, yellow, red), with a charging indicator bolt.
-* **System Volume**: Sliders to adjust output volume in real-time.
-* **System Brightness**: Real-time display brightness slider using macOS display services APIs.
-* **Realtime Metrics**: Live CPU and RAM usage bars polling every 2 seconds.
-
-### 6. 🧘 Zen Mode / Rest Timer (`leaf.fill`)
-* **Zen Rest Timer**: Designed to prompt breaks. Default duration is **15 minutes**.
-* **Duration Controls**: Adjust timer duration in 5-minute increments (range: 1 min to 120 mins).
-* **Auto-Collapse**: Collapses automatically upon starting to eliminate distraction.
-* **Collapsed View Overlay**: The collapsed notch displays a green leaf icon and a running countdown timer.
-* **Completion Alerts**: Plays a green Dynamic Island completion banner when the rest duration ends.
-
-### 7. 🚀 Favorite Applications Panel (`square.grid.2x2.fill`)
-* **App Grid**: A clean, Launchpad-like grid using high-resolution native macOS application icons.
-* **Default Apps**: Pre-populated with Finder, Safari, Music, Mail, Settings, and Terminal.
-* **Drag-and-Drop Installation**: Add any favorite app by dragging its `.app` file from Finder and dropping it onto the island.
-* **Quick Removal**: Hover over an app in the grid and click the red `(X)` button, or right-click to choose "Remove Favorite" from the context menu.
-* **One-Click Launch**: Launches apps instantly using `NSWorkspace`.
+When idle it hides completely behind the camera housing. Hover it and it expands into a tabbed
+panel; live content (music, a match in progress, a Zen countdown) shows either side of the notch
+without ever covering the camera.
 
 ---
 
-## 📐 Layout & Interaction Design
+## Requirements
 
-* **Fluid Animations**: Custom springy liquid animations when expanding, collapsing, or switching between tabs.
-* **Glassmorphism Theme**: Jet-black translucent background (`opacity(0.85)`) with subtle glowing borders and drop shadows.
-* **Accessory Agent Mode**: Runs quietly in the background. It does not clutter your Dock or Command+Tab switcher.
-* **Mouse Interactions**:
-  * **Expand**: Hover your mouse cursor over the collapsed black capsule at the top center of your display to expand the menu.
-  * **Collapse**: Move your cursor away, and it will immediately snap back into its compact capsule shape.
-  * **Zen Collapse**: Starting the Zen Mode timer immediately collapses the island for a distraction-free work/rest session.
+| | |
+|---|---|
+| macOS | 14.0 (Sonoma) or later |
+| Hardware | Any Mac. On notched MacBooks the island derives its geometry from the real cutout; on other displays it uses a compact pill at top centre. |
+| Toolchain | Xcode Command Line Tools (`xcode-select --install`) |
 
 ---
 
-## 🚀 How to Run & Start the Application
+## Build & run
 
-You can start the application in two ways:
-
-### Method 1: Using the Terminal (Recommended)
-Simply run the compilation and launch script:
 ```bash
-./build.sh --run
+./build.sh --run          # compile, bundle, sign, launch
+./build.sh                # build only
+./build.sh --universal    # universal binary (arm64 + x86_64)
+./run-tests.sh            # run the logic tests
 ```
-This script will stop any running instances, compile the source files, package them into `MacNotch.app`, and launch it.
 
-### Method 2: From Finder
-1. Open the [MacNotch](file:///Users/abhay/Desktop/projects/MacNotch) folder in Finder.
-2. Double-click the compiled application: **`MacNotch.app`**.
-3. It will immediately appear at the top-center of your screen.
+`build.sh` discovers sources automatically, keeps its build cache in `~/Library/Caches/MacNotch`,
+and ad-hoc signs the bundle with a stable identifier. **The signing step matters**: macOS ties
+Automation and Calendar permissions to a bundle's code signature, so an unsigned build re-prompts
+for every permission each time you rebuild.
 
----
+To sign with a Developer ID instead:
 
-## ⌨️ Shortcuts & Quitting
+```bash
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./build.sh
+```
 
-* **Text Focus**: Click on the Clipboard tab's search box. The window will capture keyboard focus, allowing you to type and filter.
-* **Quit the App**:
-  * With the Clipboard search box focused, press `Cmd + Q`.
-  * Or run this terminal command:
-    ```bash
-    killall MacNotch
-    ```
+To quit: right-click the island and choose **Quit MacNotch**, or use the Quit button in the
+Settings tab.
 
 ---
 
-## 🛠️ Project Structure
+## Permissions
 
-* [main.swift](file:///Users/abhay/Desktop/projects/MacNotch/main.swift): Configures the borderless `NSPanel` overlay window, sets transparent colors, forces alignment with the screen's top-center, and animates frame sizing.
-* [NotchIslandView.swift](file:///Users/abhay/Desktop/projects/MacNotch/NotchIslandView.swift): Core SwiftUI layout, tab management, visualizer animations, widget layouts (Zen Mode, Favorite Apps, Clipboard, Notification overlays), and managers.
-* [SportsManager.swift](file:///Users/abhay/Desktop/projects/MacNotch/SportsManager.swift): Handles soccer score fetching from the ESPN API, favorite team tracking, and local timezone conversions.
-* [MusicManager.swift](file:///Users/abhay/Desktop/projects/MacNotch/MusicManager.swift): Asynchronously polls Apple Music via AppleScript to update play state, durations, track names, artwork, and control actions.
-* [ClipboardManager.swift](file:///Users/abhay/Desktop/projects/MacNotch/ClipboardManager.swift): Monitors the system pasteboard (`NSPasteboard`) and keeps copy history.
-* [SystemManager.swift](file:///Users/abhay/Desktop/projects/MacNotch/SystemManager.swift): Interfaces with macOS power services, display brightness, volume outputs, and CPU/RAM host metrics.
-* [CalendarManager.swift](file:///Users/abhay/Desktop/projects/MacNotch/CalendarManager.swift): Interfaces with Apple Calendar (`EventKit`) to query upcoming events.
-* [Info.plist](file:///Users/abhay/Desktop/projects/MacNotch/Info.plist): Bundle settings defining accessory status.
-* [build.sh](file:///Users/abhay/Desktop/projects/MacNotch/build.sh): Automation script for compilation and run.
+On first launch macOS will ask for:
+
+- **Automation → Music** — read the current track and drive playback (AppleScript).
+- **Calendar** — show your next event, and write events when you sync Obsidian tasks.
+
+Both are explained by the usage strings in `Sources/Core/Info.plist`. Brightness control uses a
+private DisplayServices entry point and needs no permission; volume uses CoreAudio and needs none
+either.
+
+---
+
+## Privacy
+
+MacNotch is local-first. Two things are worth knowing:
+
+- **Clipboard history** is kept in memory only (never written to disk) and is capped by the limit
+  in Settings. Copies that an app marks private — the `org.nspasteboard.ConcealedType` /
+  `TransientType` convention used by password managers — are **never recorded**.
+- **Album artwork lookup**: when Apple Music has no local artwork (streamed or URL tracks),
+  MacNotch queries Apple's public iTunes Search API, which means the track title and artist leave
+  your machine. Turn this off with *Settings → Look up missing album art*.
+
+Live scores are fetched from ESPN's public scoreboard API. No account, no analytics, no telemetry.
+
+---
+
+## Tabs
+
+| Tab | What it does |
+|---|---|
+| 🎵 **Music** | Track, artist, artwork, scrubbing progress, and transport controls for Apple Music. Falls back to the iTunes Search API for artwork on streamed tracks. |
+| 📅 **Calendar** | Your next event in the coming 24 hours (EventKit), alongside pending Obsidian daily tasks with one-click sync into Apple Calendar. |
+| 🏆 **Sports** | Live soccer scores from ESPN across 14 competitions. Set a favourite team to have its match tracked and spotlighted, with in-island banners for kick-off, goals, half time, and full time. |
+| 📋 **Clipboard** | Rolling copy history with search and one-click re-copy, plus a drag-and-drop file shelf. |
+| ⚙️ **System** | Battery ring, volume and brightness sliders, live CPU and RAM meters. |
+| 🧘 **Zen** | A rest timer (1–120 min) that collapses the island and counts down beside the notch. |
+| 🚀 **Apps** | Launchpad-style grid of favourite apps. Drag any `.app` onto the island to add it. |
+| 💬 **Quotes** | A motivational quote, drawn from your Obsidian notes when available. |
+| 🔧 **Settings** | Obsidian vault location, launch at login, artwork lookup, external-display behaviour, clipboard history size. |
+
+### Obsidian integration
+
+Point *Settings → Obsidian Vault* at your vault. MacNotch reads:
+
+- `Daily Tasks/YYYY-MM-DD.md` and `YYYY-MM-DD.md` at the vault root — markdown checkboxes
+  (`- [ ]` / `- [x]`) become tasks.
+- `Quotes and ideas.md` — list items become the quote pool.
+
+The vault is watched with FSEvents, so edits appear without polling. Nothing is written back to
+your notes; the Sync button only creates events in Apple Calendar.
+
+---
+
+## Interaction
+
+- **Expand** — move the cursor over the notch.
+- **Collapse** — move the cursor away.
+- **Right-click** — Settings or Quit.
+- **Drag & drop** — a `.app` goes to Favourites; anything else goes to the file shelf.
+- **Multi-display** — an island appears on each screen (toggle in Settings). All screens share one
+  set of data sources, so nothing is polled twice.
+
+---
+
+## Project structure
+
+```
+Sources/
+  Core/        entry point, window/panel management, shared environment,
+               preferences, notch geometry, FSEvents watcher, logging
+  Models/      SportMatch, ObsidianTask, IslandTab, ShelfFile, FavApp
+  Managers/    one per data source — music, clipboard, system, audio,
+               calendar, obsidian, sports, quotes, zen, notifications,
+               file shelf, favourite apps
+  Views/       NotchIslandView (shell), CollapsedIslandView,
+               Tabs/ (one file per tab), Components/ (shared views)
+Tests/         logic tests, run with ./run-tests.sh
+```
+
+Managers are owned by `AppEnvironment` and shared across every screen; views hold no state that
+outlives a window.
+
+---
+
+## Known gaps
+
+- No app icon yet (`Contents/Resources` is empty).
+- Not notarized — distributing to another Mac requires a Developer ID identity and notarization.
+- The build is a `swiftc` script rather than a Swift package; migrating would enable XCTest.
+- On external displays the island sits at top centre and overlaps the menu bar clock; only
+  built-in-display placement is properly tuned.
