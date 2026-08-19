@@ -64,8 +64,17 @@ class MusicManager: ObservableObject {
             forName: NSNotification.Name("com.apple.Music.playerInfo"),
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            // When track changes, plays, or pauses, we do ONE apple script call to resync state
+        ) { [weak self] note in
+            // Music broadcasts this on its way out as well, with a stopped
+            // state. Asking it anything at that moment is what used to reopen
+            // the app seconds after it was closed, so a stop is believed rather
+            // than checked - and an idle player is what we would have drawn
+            // either way, so nothing is lost by not asking.
+            if let state = note.userInfo?["Player State"] as? String, state == "Stopped" {
+                self?.resetToIdle()
+                return
+            }
+            // Otherwise: track change, play or pause. ONE script call to resync.
             DispatchQueue.global(qos: .userInitiated).async {
                 self?.pollMusicStateBackground()
             }
@@ -123,7 +132,7 @@ class MusicManager: ObservableObject {
                 end tell
                 """
 
-                let result = self.runAppleScript(script)
+                let result = self.runMusicScript(script)
                 if result == "SUCCESS", let image = NSImage(contentsOf: self.artworkScratchURL) {
                     // Force load raw image data into memory before returning
                     _ = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
@@ -186,6 +195,28 @@ class MusicManager: ObservableObject {
         }.resume()
     }
 
+    /// True while Music.app is up and has not started tearing down.
+    ///
+    /// `tell application "Music"` *launches* Music when it is not running, so
+    /// every script in this file has to be gated on something. That used to be
+    /// a System Events process count inside the script itself, which is both an
+    /// extra Apple event and a lie during shutdown: a quitting Music is still
+    /// in the process list for a moment, so the notification it broadcasts on
+    /// the way out sent us straight back in and AppleScript reopened the app
+    /// the user had just closed. `NSRunningApplication` knows about
+    /// `isTerminated`, and answers without a round trip.
+    private var musicIsRunning: Bool {
+        NSRunningApplication
+            .runningApplications(withBundleIdentifier: "com.apple.Music")
+            .contains { !$0.isTerminated }
+    }
+
+    /// Runs `source` only when Music is already up, so nothing here can start it.
+    private func runMusicScript(_ source: String) -> String? {
+        guard musicIsRunning else { return nil }
+        return runAppleScript(source)
+    }
+
     private func runAppleScript(_ source: String) -> String? {
         return autoreleasepool {
             guard let script = NSAppleScript(source: source) else { return nil }
@@ -199,36 +230,31 @@ class MusicManager: ObservableObject {
     }
 
     private func pollMusicStateBackground() {
+        // No Music, nothing to ask: the screen goes idle without an Apple event
+        // being sent at all. This is also what keeps a login with Music closed
+        // from opening it.
+        guard musicIsRunning else {
+            DispatchQueue.main.async { [weak self] in self?.resetToIdle() }
+            return
+        }
+
         let script = """
         set sep to (character id 31)
-        set musicRunning to false
-
-        tell application "System Events"
-            set musicRunning to (count of (every process whose name is "Music")) > 0
+        tell application "Music"
+            if player state is playing then
+                return "Music" & sep & "Playing" & sep & (name of current track) & sep & (artist of current track) & sep & (player position) & sep & (duration of current track)
+            end if
+            try
+                return "Music" & sep & "Paused" & sep & (name of current track) & sep & (artist of current track) & sep & (player position) & sep & (duration of current track)
+            on error
+                return "Music" & sep & "Stopped" & sep & "" & sep & "" & sep & "0" & sep & "0"
+            end try
         end tell
-
-        if musicRunning then
-            tell application "Music"
-                if player state is playing then
-                    return "Music" & sep & "Playing" & sep & (name of current track) & sep & (artist of current track) & sep & (player position) & sep & (duration of current track)
-                end if
-            end tell
-        end if
-
-        if musicRunning then
-            tell application "Music"
-                try
-                    return "Music" & sep & "Paused" & sep & (name of current track) & sep & (artist of current track) & sep & (player position) & sep & (duration of current track)
-                on error
-                    return "Music" & sep & "Stopped" & sep & "" & sep & "" & sep & "0" & sep & "0"
-                end try
-            end tell
-        end if
-
-        return "None" & sep & "Stopped" & sep & "" & sep & "" & sep & "0" & sep & "0"
         """
 
-        let output = self.runAppleScript(script)
+        // A nil result means Music went away between the guard and the script;
+        // `parseState` reads that as idle, which is exactly right.
+        let output = self.runMusicScript(script)
         DispatchQueue.main.async { [weak self] in
             self?.parseState(output)
         }
@@ -299,9 +325,12 @@ class MusicManager: ObservableObject {
         runScriptAsync("tell application \"Music\" to back track")
     }
 
+    /// Transport commands are gated as well: a play button that reopens a
+    /// closed Music is the same surprise as a poll that does, and there is a
+    /// deliberate way to open it (the app icon in the music tab).
     private func runScriptAsync(_ scriptSource: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            _ = self?.runAppleScript(scriptSource)
+            _ = self?.runMusicScript(scriptSource)
             self?.pollMusicStateBackground()
         }
     }
