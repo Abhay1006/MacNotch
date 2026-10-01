@@ -72,16 +72,20 @@ struct MusicTab: View {
         }
     }
 
+    /// Redrawn once a second only while this tab is on screen and music is playing;
+    /// the schedule is paused otherwise, so nothing ticks in the background.
     private var progressBar: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.white.opacity(0.15))
-                    .frame(height: 4)
+        TimelineView(.animation(minimumInterval: 1.0, paused: !music.isPlaying)) { context in
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.white.opacity(0.15))
+                        .frame(height: 4)
 
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.pink)
-                    .frame(width: geo.size.width * progressFraction, height: 4)
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.pink)
+                        .frame(width: geo.size.width * progressFraction(at: context.date), height: 4)
+                }
             }
         }
         .frame(height: 4)
@@ -89,9 +93,9 @@ struct MusicTab: View {
         .accessibilityHidden(true)
     }
 
-    private var progressFraction: CGFloat {
+    private func progressFraction(at date: Date) -> CGFloat {
         guard music.trackDuration > 0 else { return 0 }
-        return CGFloat(min(1, max(0, music.playerPosition / music.trackDuration)))
+        return CGFloat(min(1, max(0, music.position(at: date) / music.trackDuration)))
     }
 
     private var controls: some View {

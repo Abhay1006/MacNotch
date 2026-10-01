@@ -14,14 +14,17 @@ struct NotchIslandView: View {
 
     private let env = AppEnvironment.shared
 
+    // Only what `body` and `bodySize` actually read. Every `@ObservedObject` here
+    // re-evaluates the whole island, on every display, whenever that manager publishes
+    // anything — so managers the root merely calls into or listens to are held plainly.
     @ObservedObject private var music: MusicManager
-    @ObservedObject private var clipboard: ClipboardManager
-    @ObservedObject private var system: SystemManager
     @ObservedObject private var sports: SportsManager
     @ObservedObject private var zen: ZenManager
     @ObservedObject private var notifications: NotificationManager
     @ObservedObject private var fileShelf: FileShelfManager
-    @ObservedObject private var favoriteApps: FavoriteAppsManager
+
+    private let clipboard: ClipboardManager
+    private let favoriteApps: FavoriteAppsManager
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -44,13 +47,12 @@ struct NotchIslandView: View {
 
         let env = AppEnvironment.shared
         _music = ObservedObject(wrappedValue: env.music)
-        _clipboard = ObservedObject(wrappedValue: env.clipboard)
-        _system = ObservedObject(wrappedValue: env.system)
         _sports = ObservedObject(wrappedValue: env.sports)
         _zen = ObservedObject(wrappedValue: env.zen)
         _notifications = ObservedObject(wrappedValue: env.notifications)
         _fileShelf = ObservedObject(wrappedValue: env.fileShelf)
-        _favoriteApps = ObservedObject(wrappedValue: env.favoriteApps)
+        clipboard = env.clipboard
+        favoriteApps = env.favoriteApps
     }
 
     var isExpanded: Bool { appState.isExpanded }
@@ -140,26 +142,6 @@ struct NotchIslandView: View {
         }
         .onReceive(sports.$favoriteTeamMatch) { match in
             handleMatchChange(match)
-        }
-        .onChange(of: system.isBatteryCharging) { _, charging in
-            // Skip until a real power-source reading has landed. `isBatteryCharging`
-            // starts false, so the first poll on a plugged-in Mac used to fire a
-            // spurious "Charging" banner on every launch.
-            guard system.hasBatteryReading else { return }
-            notifications.showNotification(
-                title: charging ? "Charging" : "Power Unplugged",
-                subtitle: "\(system.batteryPercentage)%",
-                systemImage: charging ? "bolt.fill" : "battery.100",
-                tintColor: charging ? .green : .pink
-            )
-        }
-        .onReceive(NotificationCenter.default.publisher(for: ZenManager.finishedNotification)) { _ in
-            notifications.showNotification(
-                title: "🧘 Zen Rest Complete",
-                subtitle: "Time to wake up!",
-                systemImage: "leaf.fill",
-                tintColor: .green
-            )
         }
     }
 
@@ -268,9 +250,10 @@ struct NotchIslandView: View {
 
     // MARK: - Behaviour
 
-    /// Tells the sports manager whether it is on screen, which drives its poll cadence.
+    /// Tells managers with tab-gated polling whether their tab is on screen.
     private func updateTabVisibility() {
         sports.setTabVisible(isExpanded && currentTab == .sports)
+        env.system.setTabVisible(isExpanded && currentTab == .system)
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {

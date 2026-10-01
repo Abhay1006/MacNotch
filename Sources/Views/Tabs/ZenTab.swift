@@ -26,11 +26,10 @@ struct ZenTab: View {
 
     private var runningState: some View {
         VStack(spacing: 3) {
-            Text(zen.timeFormatted)
+            ZenCountdownText(zen: zen)
                 .font(.system(size: 28, weight: .bold, design: .rounded))
                 .foregroundColor(.green)
                 .monospacedDigit()
-                .accessibilityLabel("\(zen.timeFormatted) remaining")
 
             Text("Take a deep breath and rest.")
                 .font(.system(size: 10, design: .rounded))
@@ -98,6 +97,20 @@ struct ZenTab: View {
                     .cornerRadius(12)
             }
             .buttonStyle(PlainButtonStyle())
+        }
+    }
+}
+
+/// Self-updating countdown. `Text(timerInterval:)` is advanced by SwiftUI itself, so
+/// a running session costs no manager publishes and no body re-evaluations.
+struct ZenCountdownText: View {
+    @ObservedObject var zen: ZenManager
+
+    var body: some View {
+        if let interval = zen.countdownInterval {
+            Text(timerInterval: interval, countsDown: true, showsHours: false)
+        } else {
+            Text(zen.timeFormatted)
         }
     }
 }

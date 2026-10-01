@@ -3,47 +3,64 @@ import Combine
 
 /// Rest timer.
 ///
-/// The countdown is derived from a target `Date` rather than decremented once per tick.
-/// The old `timeRemaining -= 1` approach ran on a default-mode `Timer`, so it stalled
-/// whenever a menu was tracking and drifted under timer coalescing — a 15-minute rest
-/// could take noticeably longer than 15 minutes.
+/// Nothing ticks. The manager publishes only the session's start and end dates; views
+/// render the countdown with `Text(timerInterval:)`, which SwiftUI updates itself
+/// without our code running. The previous version republished `timeRemaining` twice a
+/// second, re-evaluating every view that observed the manager for the whole session.
+///
+/// Completion is a single wall-clock deadline, so a session that spans system sleep
+/// still ends on time rather than after the sleep duration is added on.
 final class ZenManager: ObservableObject {
     @Published private(set) var isActive = false
-    @Published private(set) var timeRemaining: TimeInterval = 15 * 60
     @Published private(set) var duration: TimeInterval = 15 * 60
+    @Published private(set) var startDate: Date?
+    @Published private(set) var endDate: Date?
 
     static let finishedNotification = Notification.Name("ZenTimerFinished")
 
-    private var endDate: Date?
-    private var timer: Timer?
+    private var deadline: DispatchSourceTimer?
 
     private let minDuration: TimeInterval = 60
     private let maxDuration: TimeInterval = 120 * 60
 
     deinit {
-        timer?.invalidate()
+        deadline?.cancel()
+    }
+
+    /// The running countdown, for `Text(timerInterval:countsDown:)`.
+    var countdownInterval: ClosedRange<Date>? {
+        guard let start = startDate, let end = endDate else { return nil }
+        return start...end
+    }
+
+    /// Seconds left, computed on demand — not published.
+    var timeRemaining: TimeInterval {
+        guard let end = endDate else { return duration }
+        return max(0, end.timeIntervalSinceNow)
     }
 
     func startTimer() {
+        let now = Date()
+        startDate = now
+        endDate = now.addingTimeInterval(duration)
         isActive = true
-        endDate = Date().addingTimeInterval(duration)
-        timeRemaining = duration
 
-        timer?.invalidate()
-        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.tick()
+        deadline?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(wallDeadline: .now() + duration, leeway: .milliseconds(500))
+        timer.setEventHandler { [weak self] in
+            self?.stopTimer(finished: true)
         }
-        // `.common` so the countdown keeps running while menus or scroll views track.
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
+        timer.resume()
+        deadline = timer
     }
 
     func stopTimer(finished: Bool = false) {
-        timer?.invalidate()
-        timer = nil
+        deadline?.cancel()
+        deadline = nil
+        startDate = nil
         endDate = nil
         isActive = false
-        timeRemaining = duration
 
         if finished {
             NotificationCenter.default.post(name: ZenManager.finishedNotification, object: nil)
@@ -54,20 +71,6 @@ final class ZenManager: ObservableObject {
         let newDuration = duration + seconds
         guard newDuration >= minDuration && newDuration <= maxDuration else { return }
         duration = newDuration
-        if !isActive {
-            timeRemaining = newDuration
-        }
-    }
-
-    private func tick() {
-        guard let endDate = endDate else { return }
-        let remaining = endDate.timeIntervalSinceNow
-        if remaining <= 0 {
-            timeRemaining = 0
-            stopTimer(finished: true)
-        } else {
-            timeRemaining = remaining
-        }
     }
 
     var timeFormatted: String {

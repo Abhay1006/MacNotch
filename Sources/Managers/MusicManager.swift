@@ -4,19 +4,22 @@ import Cocoa
 
 class MusicManager: ObservableObject {
     @Published var activePlayer: PlayerType = .none
-    @Published var isPlaying: Bool = false {
-        didSet {
-            manageProgressTimer()
-        }
-    }
+    @Published var isPlaying: Bool = false
     @Published var trackTitle: String = ""
     @Published var artist: String = ""
-    @Published var playerPosition: Double = 0
     @Published var trackDuration: Double = 0
     @Published var artworkImage: NSImage? = nil
 
+    /// Playback position as of `positionAnchorDate`.
+    ///
+    /// The position used to be advanced by a 1 Hz timer writing a `@Published` value,
+    /// which re-rendered every observing view once a second for as long as music
+    /// played — including the collapsed capsule, which never shows progress. Now the
+    /// position is extrapolated on demand, and only the Music tab's progress bar asks.
+    private var positionAnchor: Double = 0
+    private var positionAnchorDate = Date()
+
     private var lastTrackIdentifier: String = ""
-    private var progressTimer: Timer?
     private var playerInfoObserver: NSObjectProtocol?
 
     /// Artwork is expensive to fetch (an AppleScript export or a network round trip),
@@ -50,7 +53,6 @@ class MusicManager: ObservableObject {
     }
 
     deinit {
-        progressTimer?.invalidate()
         if let observer = playerInfoObserver {
             DistributedNotificationCenter.default().removeObserver(observer)
         }
@@ -70,21 +72,16 @@ class MusicManager: ObservableObject {
         }
     }
 
-    private func manageProgressTimer() {
-        progressTimer?.invalidate()
-        progressTimer = nil
-        guard isPlaying else { return }
+    /// Playback position at `date`, extrapolated from the last sync while playing.
+    func position(at date: Date) -> Double {
+        guard isPlaying else { return positionAnchor }
+        let elapsed = max(0, date.timeIntervalSince(positionAnchorDate))
+        return min(trackDuration, positionAnchor + elapsed)
+    }
 
-        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            if self.playerPosition < self.trackDuration {
-                self.playerPosition += 1.0
-            }
-        }
-        // `.common` so the progress bar keeps moving while a menu is open or a
-        // scroll view is tracking, which the default run-loop mode would stall.
-        RunLoop.main.add(timer, forMode: .common)
-        progressTimer = timer
+    private func setPosition(_ position: Double) {
+        positionAnchor = position
+        positionAnchorDate = Date()
     }
 
     private func updateArtwork() {
@@ -263,9 +260,9 @@ class MusicManager: ObservableObject {
         self.activePlayer = player
         self.trackTitle = title.isEmpty ? "Not Playing" : title
         self.artist = art
-        self.playerPosition = pos
+        self.setPosition(pos)
         self.trackDuration = dur
-        self.isPlaying = (status == "Playing") // This will trigger manageProgressTimer()
+        self.isPlaying = (status == "Playing")
 
         let currentTrackIdentifier = "\(player.rawValue)|\(title)|\(art)"
         if currentTrackIdentifier != lastTrackIdentifier {
@@ -278,7 +275,7 @@ class MusicManager: ObservableObject {
         activePlayer = .none
         trackTitle = "Not Playing"
         artist = ""
-        playerPosition = 0
+        setPosition(0)
         trackDuration = 0
         isPlaying = false
         artworkImage = nil
@@ -288,6 +285,9 @@ class MusicManager: ObservableObject {
     func playPause() {
         runScriptAsync("tell application \"Music\" to playpause")
         // Optimistically toggle state; the follow-up poll corrects it if the script failed.
+        // Freeze the extrapolated position first, so pausing doesn't snap the bar back
+        // to where it was at the last sync.
+        setPosition(position(at: Date()))
         self.isPlaying.toggle()
     }
 
