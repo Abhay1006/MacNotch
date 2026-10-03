@@ -1,4 +1,6 @@
 import Foundation
+import Combine
+import SwiftUI
 
 /// The single owner of every manager in the app.
 ///
@@ -28,5 +30,43 @@ final class AppEnvironment {
     let fileShelf = FileShelfManager()
     let favoriteApps = FavoriteAppsManager()
 
-    private init() {}
+    private var cancellables = Set<AnyCancellable>()
+
+    private init() {
+        wireAppWideBanners()
+    }
+
+    /// Banners that depend on app state rather than on any one window.
+    ///
+    /// These used to live in `NotchIslandView`, which meant the root view had to observe
+    /// `SystemManager` (re-rendering on every sample) just to watch for a plug event, and
+    /// each display's view posted its own copy of the same banner.
+    private func wireAppWideBanners() {
+        system.$isBatteryCharging
+            .removeDuplicates()
+            .sink { [unowned self] charging in
+                // `@Published` delivers in willSet, before `hasBatteryReading` flips on
+                // the first read — so the initial plugged-in state never fires a banner.
+                guard self.system.hasBatteryReading else { return }
+                self.notifications.showNotification(
+                    title: charging ? "Charging" : "Power Unplugged",
+                    subtitle: "\(self.system.batteryPercentage)%",
+                    systemImage: charging ? "bolt.fill" : "battery.100",
+                    tintColor: charging ? .green : .pink
+                )
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: ZenManager.finishedNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [unowned self] _ in
+                self.notifications.showNotification(
+                    title: "🧘 Zen Rest Complete",
+                    subtitle: "Time to wake up!",
+                    systemImage: "leaf.fill",
+                    tintColor: .green
+                )
+            }
+            .store(in: &cancellables)
+    }
 }

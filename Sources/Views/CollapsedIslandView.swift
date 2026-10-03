@@ -117,7 +117,7 @@ struct CollapsedIslandView: View {
 
         Spacer()
 
-        Text(zen.timeFormatted)
+        ZenCountdownText(zen: zen)
             .font(.system(size: 11, weight: .bold, design: .rounded))
             .foregroundColor(.green)
             .monospacedDigit()
