@@ -5,6 +5,10 @@ import Cocoa
 /// The island itself: a collapsed capsule that hugs the camera notch, expanding into a
 /// tabbed panel on hover.
 ///
+/// The view fills a fixed, mostly transparent canvas (`NotchMetrics.canvasSize`) and
+/// draws the island top-centred inside it, so growing and shrinking is a single SwiftUI
+/// animation with room left over for the drop shadow.
+///
 /// Managers are *not* created here. They live in `AppEnvironment` and are shared by every
 /// screen — one view per display used to mean one of everything per display.
 struct NotchIslandView: View {
@@ -14,7 +18,7 @@ struct NotchIslandView: View {
 
     private let env = AppEnvironment.shared
 
-    // Only what `body` and `bodySize` actually read. Every `@ObservedObject` here
+    // Only what `body` and `collapsedSize` actually read. Every `@ObservedObject` here
     // re-evaluates the whole island, on every display, whenever that manager publishes
     // anything — so managers the root merely calls into or listens to are held plainly.
     @ObservedObject private var music: MusicManager
@@ -22,13 +26,13 @@ struct NotchIslandView: View {
     @ObservedObject private var zen: ZenManager
     @ObservedObject private var notifications: NotificationManager
     @ObservedObject private var fileShelf: FileShelfManager
+    @ObservedObject private var preferences: Preferences
 
     private let clipboard: ClipboardManager
     private let favoriteApps: FavoriteAppsManager
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var currentTab: IslandTab = .music
     @State private var isDragOver = false
 
     // Notification de-duplication state
@@ -51,6 +55,7 @@ struct NotchIslandView: View {
         _zen = ObservedObject(wrappedValue: env.zen)
         _notifications = ObservedObject(wrappedValue: env.notifications)
         _fileShelf = ObservedObject(wrappedValue: env.fileShelf)
+        _preferences = ObservedObject(wrappedValue: env.preferences)
         clipboard = env.clipboard
         favoriteApps = env.favoriteApps
     }
@@ -80,69 +85,96 @@ struct NotchIslandView: View {
         return sports.favoriteTeamMatch != nil && shouldShowFavoriteTeamMatchCollapsed
     }
 
-    /// Content height per tab, *excluding* the space reserved for the physical camera.
-    private var tabContentHeight: CGFloat {
-        switch currentTab {
-        case .music: return 135
-        case .calendar: return 135
-        case .sports: return sports.favoriteTeamMatch != nil ? 300 : 220
-        case .clipboard: return fileShelf.files.isEmpty ? 320 : 355
-        case .system: return 190
-        case .zen: return 155
-        case .apps: return 175
-        case .quotes: return 135
-        case .settings: return 205
-        }
-    }
-
-    var bodySize: CGSize {
-        guard isExpanded else {
-            return collapsedHasContent ? metrics.collapsedActive : metrics.collapsedIdle
-        }
-        return CGSize(
-            width: metrics.expandedWidth,
-            height: metrics.expandedTopClearance + tabContentHeight
-        )
+    /// Collapsed capsule size. The expanded panel has no fixed size: it takes the height
+    /// its current tab lays out at, so tabs no longer need a hand-maintained height table.
+    private var collapsedSize: CGSize {
+        collapsedHasContent ? metrics.collapsedActive : metrics.collapsedIdle
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if !isExpanded {
+        island
+            .frame(
+                width: metrics.canvasSize.width,
+                height: metrics.canvasSize.height,
+                alignment: .top
+            )
+            .onChange(of: appState.isExpanded) { _, _ in updateTabVisibility() }
+            .onChange(of: appState.currentTab) { _, tab in
+                updateTabVisibility()
+                if tab == .quotes { env.quotes.selectNewQuote() }
+                if tab == .calendar { env.obsidian.scanTasks() }
+            }
+            .onChange(of: preferences.hiddenTabs) { _, _ in ensureCurrentTabIsVisible() }
+            .onAppear { ensureCurrentTabIsVisible() }
+            .onReceive(clipboard.$items) { items in
+                handleClipboardChange(items)
+            }
+            .onReceive(music.$trackTitle) { title in
+                handleTrackChange(title)
+            }
+            .onReceive(sports.$favoriteTeamMatch) { match in
+                handleMatchChange(match)
+            }
+    }
+
+    private var island: some View {
+        ZStack(alignment: .top) {
+            if isExpanded {
+                expandedView
+                    .transition(expandedTransition)
+            } else {
                 CollapsedIslandView(
                     metrics: metrics,
                     showFavoriteMatch: shouldShowFavoriteTeamMatchCollapsed
                 )
-            } else {
-                expandedView
+                .transition(collapsedTransition)
             }
         }
-        .frame(width: bodySize.width, height: bodySize.height)
-        .background(islandBackground)
+        .frame(
+            width: isExpanded ? metrics.expandedWidth : collapsedSize.width,
+            height: isExpanded ? nil : collapsedSize.height,
+            alignment: .top
+        )
+        // Lay the expanded panel out at its natural height rather than the canvas's.
+        .fixedSize(horizontal: false, vertical: true)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: IslandSizeKey.self, value: proxy.size)
+            }
+        )
+        // Content is clipped to the outline so it never spills past the shape while
+        // the island is still growing; the fill and shadow sit outside the clip.
+        .clipShape(islandShape)
+        .background(islandFill)
+        .overlay(islandOutline)
+        .contentShape(islandShape)
         .contextMenu { islandContextMenu }
-        .onChange(of: appState.isExpanded) { _, _ in updateTabVisibility() }
-        .onChange(of: currentTab) { _, _ in
-            updateTabVisibility()
-            if currentTab == .quotes { env.quotes.selectNewQuote() }
-            if currentTab == .calendar { env.obsidian.scanTasks() }
-        }
-        .onChange(of: bodySize) { _, newSize in
-            onSizeChanged(newSize)
-        }
-        .onAppear {
-            onSizeChanged(bodySize)
-        }
         .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
             handleDrop(providers)
         }
-        .onReceive(clipboard.$items) { items in
-            handleClipboardChange(items)
+        .onPreferenceChange(IslandSizeKey.self) { size in
+            onSizeChanged(size)
         }
-        .onReceive(music.$trackTitle) { title in
-            handleTrackChange(title)
-        }
-        .onReceive(sports.$favoriteTeamMatch) { match in
-            handleMatchChange(match)
-        }
+    }
+
+    /// Expanded content waits a beat so it fades in once there is room for it, instead
+    /// of being squeezed into a capsule that is still growing.
+    private var expandedTransition: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        return .asymmetric(
+            insertion: .opacity
+                .combined(with: .scale(scale: 0.94, anchor: .top))
+                .animation(.easeOut(duration: 0.22).delay(0.08)),
+            removal: .opacity.animation(.easeIn(duration: 0.1))
+        )
+    }
+
+    private var collapsedTransition: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        return .asymmetric(
+            insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.1)),
+            removal: .opacity.animation(.easeIn(duration: 0.08))
+        )
     }
 
     /// Expanded, the top corners flare out into the screen edge so the panel grows out of
@@ -151,20 +183,25 @@ struct NotchIslandView: View {
         NotchShape(topCornerRadius: isExpanded ? -10 : 15, bottomCornerRadius: isExpanded ? 24 : 15)
     }
 
-    private var islandBackground: some View {
+    private var islandFill: some View {
+        islandShape
+            // Opaque when expanded so the top matches the black camera housing it meets.
+            .fill(Color.black.opacity(isExpanded ? 1 : 0.85))
+            // The idle capsule hides behind the camera; a shadow would peek out below it.
+            .shadow(
+                color: Color.black.opacity(isExpanded || collapsedHasContent ? 0.5 : 0),
+                radius: 10, x: 0, y: 5
+            )
+    }
+
+    private var islandOutline: some View {
         var outline = islandShape
         // No border along the screen edge when expanded — it would draw a seam where the
         // panel is meant to merge into the top of the screen.
         outline.closesTopEdge = !isExpanded
 
-        return islandShape
-            // Opaque when expanded so the top matches the black camera housing it meets.
-            .fill(Color.black.opacity(isExpanded ? 1 : 0.85))
-            .overlay(
-                outline
-                    .stroke(isDragOver ? Color.pink : Color.white.opacity(0.12), lineWidth: isDragOver ? 2 : 1)
-            )
-            .shadow(color: Color.black.opacity(0.5), radius: 10, x: 0, y: 5)
+        return outline
+            .stroke(isDragOver ? Color.pink : Color.white.opacity(0.12), lineWidth: isDragOver ? 2 : 1)
     }
 
     /// Right-click menu. Previously the only documented way to quit was focusing the
@@ -173,7 +210,7 @@ struct NotchIslandView: View {
     private var islandContextMenu: some View {
         Button("Settings…") {
             withAnimation(springAnimation) {
-                currentTab = .settings
+                appState.currentTab = .settings
                 appState.isExpanded = true
             }
         }
@@ -193,17 +230,17 @@ struct NotchIslandView: View {
 
             // Tab Header (centered, below the notch)
             HStack(spacing: 13) {
-                ForEach(IslandTab.allCases, id: \.self) { tab in
+                ForEach(preferences.visibleTabs, id: \.self) { tab in
                     Button(action: {
                         withAnimation(springAnimation) {
-                            currentTab = tab
+                            appState.currentTab = tab
                         }
                     }) {
                         tabButtonContent(tab: tab)
                     }
                     .buttonStyle(PlainButtonStyle())
                     .accessibilityLabel(tab.accessibilityLabel)
-                    .accessibilityAddTraits(currentTab == tab ? [.isSelected] : [])
+                    .accessibilityAddTraits(appState.currentTab == tab ? [.isSelected] : [])
                     .help(tab.accessibilityLabel)
                 }
             }
@@ -215,7 +252,7 @@ struct NotchIslandView: View {
 
             // Tab Contents
             Group {
-                switch currentTab {
+                switch appState.currentTab {
                 case .music:
                     MusicTab(music: env.music)
                 case .calendar:
@@ -240,6 +277,9 @@ struct NotchIslandView: View {
                     SettingsTab(preferences: env.preferences)
                 }
             }
+            // Breathing room that used to come from padding every tab out to a fixed height.
+            .padding(.top, 10)
+            .padding(.bottom, 14)
             .transition(.asymmetric(
                 insertion: .opacity.combined(with: .move(edge: .bottom)),
                 removal: .opacity
@@ -250,12 +290,12 @@ struct NotchIslandView: View {
     private func tabButtonContent(tab: IslandTab) -> some View {
         VStack(spacing: 4) {
             Image(systemName: tab.symbol)
-                .font(.system(size: 14, weight: currentTab == tab ? .semibold : .regular))
-                .foregroundColor(currentTab == tab ? .pink : .white.opacity(0.45))
+                .font(.system(size: 14, weight: appState.currentTab == tab ? .semibold : .regular))
+                .foregroundColor(appState.currentTab == tab ? .pink : .white.opacity(0.45))
 
             // Indicator line
             RoundedRectangle(cornerRadius: 1)
-                .fill(currentTab == tab ? Color.pink : Color.clear)
+                .fill(appState.currentTab == tab ? Color.pink : Color.clear)
                 .frame(width: 14, height: 2)
         }
     }
@@ -264,8 +304,17 @@ struct NotchIslandView: View {
 
     /// Tells managers with tab-gated polling whether their tab is on screen.
     private func updateTabVisibility() {
-        sports.setTabVisible(isExpanded && currentTab == .sports)
-        env.system.setTabVisible(isExpanded && currentTab == .system)
+        sports.setTabVisible(isExpanded && appState.currentTab == .sports)
+        env.system.setTabVisible(isExpanded && appState.currentTab == .system)
+    }
+
+    /// Hiding the tab you're on in Settings mustn't leave the panel showing a tab that
+    /// is no longer in the tab bar.
+    private func ensureCurrentTabIsVisible() {
+        let visible = preferences.visibleTabs
+        if !visible.contains(appState.currentTab), let first = visible.first {
+            appState.currentTab = first
+        }
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -282,7 +331,7 @@ struct NotchIslandView: View {
                             tintColor: .green
                         )
                         withAnimation(springAnimation) {
-                            currentTab = .apps
+                            appState.currentTab = .apps
                             appState.isExpanded = true
                         }
                     } else {
@@ -293,7 +342,7 @@ struct NotchIslandView: View {
                             systemImage: "doc.badge.plus"
                         )
                         withAnimation(springAnimation) {
-                            currentTab = .clipboard
+                            appState.currentTab = .clipboard
                             appState.isExpanded = true
                         }
                     }
@@ -396,5 +445,13 @@ struct NotchIslandView: View {
         lastAwayScore = currentAwayScore
         lastMatchStatusState = match.statusState
         lastMatchStatusDetail = match.statusDetail
+    }
+}
+
+/// The island's laid-out size, reported to the window controller for hover and hit testing.
+private struct IslandSizeKey: PreferenceKey {
+    static let defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = nextValue()
     }
 }

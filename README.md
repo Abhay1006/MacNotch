@@ -85,7 +85,7 @@ Live scores are fetched from ESPN's public scoreboard API. No account, no analyt
 | 🧘 **Zen** | A rest timer (1–120 min) that collapses the island and counts down beside the notch. |
 | 🚀 **Apps** | Launchpad-style grid of favourite apps. Drag any `.app` onto the island to add it. |
 | 💬 **Quotes** | A motivational quote, drawn from your Obsidian notes when available. |
-| 🔧 **Settings** | Obsidian vault location, launch at login, artwork lookup, external-display behaviour, clipboard history size. |
+| 🔧 **Settings** | Obsidian vault location, launch at login, artwork lookup, external-display behaviour, haptic feedback, tab order and visibility, clipboard history size. |
 
 ### Obsidian integration
 
@@ -102,8 +102,13 @@ your notes; the Sync button only creates events in Apple Calendar.
 
 ## Interaction
 
-- **Expand** — move the cursor over the notch.
-- **Collapse** — move the cursor away.
+- **Expand** — rest the cursor on the notch. A short delay stops it popping open as you sweep
+  across the menu bar, and a Force Touch trackpad gives a light tap when it opens (toggle in
+  Settings).
+- **Collapse** — move the cursor away, or press **Esc** after clicking into the island.
+- **Switch tabs** — click an icon, or swipe sideways with two fingers. On the Clipboard tab, swipe
+  on the tab bar so the file shelf can still scroll.
+- **Rearrange tabs** — *Settings → Tabs* hides tabs you don't use and reorders the rest.
 - **Right-click** — Settings or Quit.
 - **Drag & drop** — a `.app` goes to Favourites; anything else goes to the file shelf.
 - **Multi-display** — an island appears on each screen (toggle in Settings). All screens share one

@@ -165,6 +165,54 @@ func runAllTests() {
               "expanded hover rect covers the panel body")
     }
 
+    suite("NotchMetrics canvas") {
+        guard let screen = NSScreen.screens.first else {
+            check(false, "a screen is available")
+            return
+        }
+        let metrics = NotchMetrics(screen: screen)
+        let canvas = metrics.canvasSize
+
+        // The window never resizes, so it must hold every state of the island plus its shadow.
+        check(canvas.width >= metrics.expandedWidth + NotchMetrics.shadowPadding * 2,
+              "canvas fits the expanded panel and its shadow")
+        check(canvas.width >= metrics.collapsedActive.width + NotchMetrics.shadowPadding * 2,
+              "canvas fits the active capsule and its shadow")
+        check(canvas.height >= metrics.maxExpandedHeight + NotchMetrics.shadowPadding,
+              "canvas fits the tallest panel and its shadow")
+
+        let frame = metrics.canvasFrame(on: screen)
+        checkEqual(frame.maxY, screen.frame.maxY, "canvas is flush with the top of the screen")
+        checkEqual(frame.midX, screen.frame.midX, "canvas is centred")
+    }
+
+    // MARK: - Tab order
+
+    suite("IslandTab.arrange") {
+        let all = IslandTab.allCases
+        checkEqual(IslandTab.arrange(order: []), all, "empty order falls back to the default")
+        checkEqual(IslandTab.arrange(order: all.map(\.key)), all, "default order round-trips")
+
+        for tab in all {
+            checkEqual(IslandTab(key: tab.key), tab, "key round-trips for \(tab.key)")
+        }
+
+        let reordered = IslandTab.arrange(order: ["zen", "music"])
+        checkEqual(Array(reordered.prefix(2)), [.zen, .music], "saved tabs come first, in order")
+        checkEqual(reordered.count, all.count, "tabs missing from the saved order are appended")
+
+        let messy = IslandTab.arrange(order: ["zen", "bogus", "zen", "music"])
+        checkEqual(Array(messy.prefix(2)), [.zen, .music], "unknown keys and duplicates are dropped")
+        checkEqual(messy.count, all.count, "…without losing or repeating any tab")
+
+        let hidden = IslandTab.arrange(order: [], hidden: ["sports", "quotes"])
+        check(!hidden.contains(.sports) && !hidden.contains(.quotes), "hidden tabs are left out")
+        checkEqual(hidden.count, all.count - 2, "only the hidden tabs are left out")
+
+        let tryHideSettings = IslandTab.arrange(order: [], hidden: Set(all.map(\.key)))
+        checkEqual(tryHideSettings, [.settings], "Settings can never be hidden")
+    }
+
     // MARK: - Zen timer formatting
 
     suite("ZenManager") {

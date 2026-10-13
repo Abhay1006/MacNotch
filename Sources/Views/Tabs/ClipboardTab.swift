@@ -118,7 +118,7 @@ struct ClipboardTab: View {
     }
 
     private var historyList: some View {
-        ScrollView {
+        FittedScrollView(maxHeight: 180) {
             VStack(spacing: 6) {
                 if filteredItems.isEmpty {
                     Text(clipboard.items.isEmpty ? "Nothing copied yet" : "No items found")
@@ -133,7 +133,6 @@ struct ClipboardTab: View {
             }
             .padding(.horizontal, 16)
         }
-        .frame(maxHeight: 180)
     }
 
     private func row(_ item: ClipboardManager.ClipboardItem) -> some View {

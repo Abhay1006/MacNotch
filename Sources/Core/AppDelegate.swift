@@ -6,6 +6,9 @@ import Combine
 class AppState: ObservableObject {
     @Published var isExpanded: Bool = false
     @Published var hoverLocked: Bool = false
+    /// Lives here rather than in the view so the window controller can switch tabs on a
+    /// trackpad swipe.
+    @Published var currentTab: IslandTab = .music
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -20,6 +23,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// setup. There is no reason for more than one.
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
+    private var localKeyMonitor: Any?
+    private var localScrollMonitor: Any?
     private var lastMouseLocation: NSPoint = .zero
 
     private var cancellables = Set<AnyCancellable>()
@@ -122,20 +127,63 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Hover
 
     private func startMouseMonitoring() {
-        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
-            self?.mouseMoved()
+        // Drags count too: a file dragged from Finder moves the cursor without any
+        // `.mouseMoved`, and the island must stop ignoring the mouse to accept the drop.
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.mouseMoved, .leftMouseDragged]
+        ) { [weak self] event in
+            if event.type == .leftMouseDragged {
+                self?.mouseDragged()
+            } else {
+                self?.mouseMoved()
+            }
         }
         localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
             self?.mouseMoved()
             return event
         }
+
+        // Only reaches us while an island window is key (after clicking into it): a
+        // global key monitor would need Accessibility access, and making the panel key on
+        // hover would steal typing from the app underneath.
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let escapeKeyCode: UInt16 = 53
+            if event.keyCode == escapeKeyCode,
+               let controller = self?.controller(for: event.window),
+               controller.appState.isExpanded {
+                controller.dismiss()
+                return nil
+            }
+            return event
+        }
+
+        // Scroll events go to the window under the cursor even while the app is inactive.
+        localScrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            self?.controller(for: event.window)?.handleScroll(event)
+            return event
+        }
     }
 
     private func stopMouseMonitoring() {
-        if let monitor = globalMouseMonitor { NSEvent.removeMonitor(monitor) }
-        if let monitor = localMouseMonitor { NSEvent.removeMonitor(monitor) }
+        for monitor in [globalMouseMonitor, localMouseMonitor, localKeyMonitor, localScrollMonitor] {
+            if let monitor = monitor { NSEvent.removeMonitor(monitor) }
+        }
         globalMouseMonitor = nil
         localMouseMonitor = nil
+        localKeyMonitor = nil
+        localScrollMonitor = nil
+    }
+
+    private func controller(for window: NSWindow?) -> NotchWindowController? {
+        guard let window = window else { return nil }
+        return controllers.values.first { $0.window === window }
+    }
+
+    private func mouseDragged() {
+        let location = NSEvent.mouseLocation
+        for controller in controllers.values {
+            controller.updateMouseTransparency(at: location)
+        }
     }
 
     private func mouseMoved() {
@@ -162,7 +210,27 @@ class NotchWindowController {
 
     private var isMenuTracking = false
     private var menuCooldownActive = false
-    private var targetSize: CGSize
+
+    /// The island's current laid-out size, as reported by the view. The window itself
+    /// never changes size; this drives hover and click-through instead.
+    private var islandSize: CGSize
+
+    /// Hover intent: open only once the cursor rests on the island, close only once it
+    /// has been gone for a moment. Without these, sweeping across the menu bar popped the
+    /// panel open, and grazing its edge made it flicker.
+    private static let openDelay: TimeInterval = 0.12
+    private static let closeDelay: TimeInterval = 0.25
+    private var pendingHoverChange: DispatchWorkItem?
+    private var pendingHoverTarget: Bool?
+
+    /// Set when the island is dismissed with Esc, so it doesn't spring straight back open
+    /// under a cursor that is still sitting on it.
+    private var reopenRequiresExit = false
+
+    /// Two-finger horizontal swipe tracking.
+    private var swipeDistance = CGSize.zero
+    private var swipeHandled = false
+    private var swipeStartedInHeader = false
 
     private var menuBeginObserver: Any?
     private var menuEndObserver: Any?
@@ -172,13 +240,10 @@ class NotchWindowController {
         self.delegate = delegate
         self.appState = AppState()
         self.metrics = NotchMetrics(screen: screen)
-        self.targetSize = metrics.collapsedIdle
-
-        let x = screen.frame.minX + (screen.frame.width - targetSize.width) / 2
-        let y = screen.frame.maxY - targetSize.height
+        self.islandSize = metrics.collapsedIdle
 
         window = NotchPanel(
-            contentRect: NSRect(x: x, y: y, width: targetSize.width, height: targetSize.height),
+            contentRect: metrics.canvasFrame(on: screen),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -189,12 +254,11 @@ class NotchWindowController {
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = false
+        // The window spans the island's largest size; until the cursor is actually on
+        // the island, clicks fall through to the menu bar and apps underneath.
+        window.ignoresMouseEvents = true
 
-        let contentView = NotchIslandView(appState: appState, metrics: metrics) { [weak self] newSize in
-            self?.resizeWindow(to: newSize)
-        }
-
-        window.contentView = AcceptsFirstMouseHostingView(rootView: contentView)
+        installContentView()
         // `orderFrontRegardless` alone is enough — `makeKeyAndOrderFront` would steal
         // key status from whatever the user is working in, at launch, on every screen.
         window.orderFrontRegardless()
@@ -203,10 +267,12 @@ class NotchWindowController {
     }
 
     deinit {
+        cancelPendingHoverChange()
         removeMenuObservers()
     }
 
     func close() {
+        cancelPendingHoverChange()
         removeMenuObservers()
         window.close()
     }
@@ -217,12 +283,16 @@ class NotchWindowController {
         let newMetrics = NotchMetrics(screen: screen)
         if newMetrics != metrics {
             metrics = newMetrics
-            let contentView = NotchIslandView(appState: appState, metrics: metrics) { [weak self] newSize in
-                self?.resizeWindow(to: newSize)
-            }
-            window.contentView = AcceptsFirstMouseHostingView(rootView: contentView)
+            installContentView()
         }
-        repositionWindow(to: targetSize, animated: false)
+        window.setFrame(metrics.canvasFrame(on: screen), display: true)
+    }
+
+    private func installContentView() {
+        let contentView = NotchIslandView(appState: appState, metrics: metrics) { [weak self] newSize in
+            self?.islandDidResize(to: newSize)
+        }
+        window.contentView = AcceptsFirstMouseHostingView(rootView: contentView)
     }
 
     private func setupMenuObservers() {
@@ -261,44 +331,140 @@ class NotchWindowController {
         }
     }
 
-    func checkMouseHover(at location: NSPoint) {
-        guard !appState.hoverLocked, !isMenuTracking, !menuCooldownActive else { return }
+    // MARK: Hover
 
-        // Track the rendered size instead of a fixed 240×35 floor, which used to
-        // swallow clicks on menu-bar items near the centre of the screen.
-        let isInside = metrics.hoverRect(on: screen, currentSize: targetSize).contains(location)
+    /// Track the rendered size instead of a fixed 240×35 floor, which used to swallow
+    /// clicks on menu-bar items near the centre of the screen.
+    private var hoverRect: NSRect {
+        metrics.hoverRect(on: screen, currentSize: islandSize)
+    }
 
-        if isInside != appState.isExpanded {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                appState.isExpanded = isInside
-            }
+    private func islandDidResize(to size: CGSize) {
+        guard size != islandSize else { return }
+        islandSize = size
+        updateMouseTransparency(at: NSEvent.mouseLocation)
+    }
+
+    /// Let the mouse through everywhere except over the island itself.
+    func updateMouseTransparency(at location: NSPoint) {
+        let ignores = !hoverRect.contains(location)
+        if window.ignoresMouseEvents != ignores {
+            window.ignoresMouseEvents = ignores
         }
     }
 
-    func resizeWindow(to size: CGSize) {
-        if targetSize == size { return } // Prevent continuous redundant animations
-        targetSize = size
-        repositionWindow(to: size, animated: true)
-    }
+    func checkMouseHover(at location: NSPoint) {
+        updateMouseTransparency(at: location)
 
-    private func repositionWindow(to size: CGSize, animated: Bool) {
-        let midX = screen.frame.minX + screen.frame.width / 2
-        let newFrame = NSRect(
-            x: midX - size.width / 2,
-            y: screen.frame.maxY - size.height,
-            width: size.width,
-            height: size.height
-        )
+        let isInside = hoverRect.contains(location)
+        if !isInside { reopenRequiresExit = false }
 
-        guard animated else {
-            window.setFrame(newFrame, display: true)
+        guard !appState.hoverLocked, !isMenuTracking, !menuCooldownActive else {
+            cancelPendingHoverChange()
             return
         }
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.25
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(newFrame, display: true)
+        let wantsExpanded = isInside && !reopenRequiresExit
+        guard wantsExpanded != appState.isExpanded else {
+            cancelPendingHoverChange()
+            return
+        }
+        guard pendingHoverTarget != wantsExpanded else { return } // Already on its way.
+
+        cancelPendingHoverChange()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.pendingHoverChange = nil
+            self.pendingHoverTarget = nil
+
+            // Re-check: the cursor may have moved on, or a menu opened, while waiting.
+            let stillInside = self.hoverRect.contains(NSEvent.mouseLocation)
+            guard stillInside == wantsExpanded,
+                  !self.appState.hoverLocked, !self.isMenuTracking, !self.menuCooldownActive
+            else { return }
+            self.setExpanded(wantsExpanded)
+        }
+        pendingHoverChange = work
+        pendingHoverTarget = wantsExpanded
+        let delay = wantsExpanded ? NotchWindowController.openDelay : NotchWindowController.closeDelay
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func cancelPendingHoverChange() {
+        pendingHoverChange?.cancel()
+        pendingHoverChange = nil
+        pendingHoverTarget = nil
+    }
+
+    private func setExpanded(_ expanded: Bool) {
+        guard appState.isExpanded != expanded else { return }
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        withAnimation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.75)) {
+            appState.isExpanded = expanded
+        }
+        // Only felt on a Force Touch trackpad with a finger on it; a no-op otherwise.
+        if expanded && Preferences.shared.hapticFeedbackEnabled {
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        }
+    }
+
+    /// Esc: collapse, and hand the keyboard back to the app the user came from.
+    func dismiss() {
+        cancelPendingHoverChange()
+        reopenRequiresExit = hoverRect.contains(NSEvent.mouseLocation)
+        setExpanded(false)
+        if window.isKeyWindow {
+            delegate?.restorePreviousActiveApp()
+        }
+    }
+
+    // MARK: Swipe between tabs
+
+    func handleScroll(_ event: NSEvent) {
+        // Trackpad gestures only: a mouse wheel has no phase, and momentum would fire a
+        // second switch after the fingers lift.
+        guard appState.isExpanded, event.momentumPhase.isEmpty, !event.phase.isEmpty else { return }
+
+        if event.phase.contains(.began) {
+            swipeDistance = .zero
+            swipeHandled = false
+            let depth = screen.frame.maxY - NSEvent.mouseLocation.y
+            swipeStartedInHeader = depth <= metrics.tabHeaderDepth
+            return
+        }
+        guard event.phase.contains(.changed), !swipeHandled else { return }
+
+        swipeDistance.width += event.scrollingDeltaX
+        swipeDistance.height += event.scrollingDeltaY
+
+        let threshold: CGFloat = 50
+        guard abs(swipeDistance.width) > threshold,
+              abs(swipeDistance.width) > abs(swipeDistance.height) * 2 else { return }
+
+        // The clipboard tab's file shelf scrolls sideways itself, so there only a swipe
+        // on the tab bar switches tabs.
+        if appState.currentTab == .clipboard,
+           !AppEnvironment.shared.fileShelf.files.isEmpty,
+           !swipeStartedInHeader {
+            return
+        }
+
+        swipeHandled = true
+        // Deltas follow the content, not the fingers, under natural scrolling.
+        let fingerDX = event.isDirectionInvertedFromDevice ? -swipeDistance.width : swipeDistance.width
+        // Fingers moving left bring in the next tab, like turning a page.
+        selectAdjacentTab(fingerDX < 0 ? 1 : -1)
+    }
+
+    private func selectAdjacentTab(_ step: Int) {
+        let tabs = Preferences.shared.visibleTabs
+        guard let index = tabs.firstIndex(of: appState.currentTab) else { return }
+        let target = index + step
+        guard tabs.indices.contains(target) else { return }
+
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)) {
+            appState.currentTab = tabs[target]
         }
     }
 }

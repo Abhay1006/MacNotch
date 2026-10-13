@@ -137,7 +137,7 @@ struct SportsTab: View {
     // MARK: - List
 
     private var matchList: some View {
-        ScrollView {
+        FittedScrollView(maxHeight: 140) {
             VStack(spacing: 8) {
                 if sports.favoriteTeam.isEmpty {
                     leagueMode
@@ -147,7 +147,6 @@ struct SportsTab: View {
             }
             .padding(.horizontal, 16)
         }
-        .frame(maxHeight: 140)
     }
 
     @ViewBuilder
