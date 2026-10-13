@@ -10,11 +10,13 @@ struct SettingsTab: View {
     @ObservedObject var preferences: Preferences
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
+        FittedScrollView(maxHeight: 260, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 10) {
                 vaultSection
                 Divider().background(Color.white.opacity(0.08))
                 togglesSection
+                Divider().background(Color.white.opacity(0.08))
+                tabsSection
                 Divider().background(Color.white.opacity(0.08))
                 clipboardSection
                 Divider().background(Color.white.opacity(0.08))
@@ -101,7 +103,84 @@ struct SettingsTab: View {
                 isOn: $preferences.showOnExternalDisplays,
                 caption: nil
             )
+            settingToggle(
+                "Haptic feedback",
+                isOn: $preferences.hapticFeedbackEnabled,
+                caption: "A light trackpad tap when the island opens."
+            )
         }
+    }
+
+    // MARK: - Tabs
+
+    private var tabsSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            sectionLabel("Tabs", systemImage: "rectangle.3.group")
+
+            let tabs = preferences.orderedTabs
+            ForEach(Array(tabs.enumerated()), id: \.element) { index, tab in
+                tabRow(tab, isFirst: index == 0, isLast: index == tabs.count - 1)
+            }
+
+            Text("Swipe sideways with two fingers to switch tabs. Esc closes the island.")
+                .font(.system(size: 8, design: .rounded))
+                .foregroundColor(.white.opacity(0.5))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func tabRow(_ tab: IslandTab, isFirst: Bool, isLast: Bool) -> some View {
+        let isVisible = preferences.isTabVisible(tab)
+
+        return HStack(spacing: 6) {
+            Image(systemName: tab.symbol)
+                .font(.system(size: 9))
+                .foregroundColor(isVisible ? .pink : .white.opacity(0.3))
+                .frame(width: 14)
+
+            Text(tab.accessibilityLabel)
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundColor(.white.opacity(isVisible ? 0.9 : 0.4))
+
+            Spacer()
+
+            if !tab.isAlwaysVisible {
+                Toggle("Show \(tab.accessibilityLabel)", isOn: Binding(
+                    get: { isVisible },
+                    set: { preferences.setTab(tab, visible: $0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .tint(.pink)
+            }
+
+            moveButton("chevron.up", label: "Move \(tab.accessibilityLabel) up", disabled: isFirst) {
+                preferences.moveTab(tab, by: -1)
+            }
+            moveButton("chevron.down", label: "Move \(tab.accessibilityLabel) down", disabled: isLast) {
+                preferences.moveTab(tab, by: 1)
+            }
+        }
+    }
+
+    private func moveButton(
+        _ systemImage: String,
+        label: String,
+        disabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 8, weight: .bold))
+                .foregroundColor(.white.opacity(disabled ? 0.15 : 0.6))
+                .frame(width: 16, height: 16)
+                .background(Color.white.opacity(disabled ? 0.02 : 0.08))
+                .cornerRadius(4)
+        }
+        .buttonStyle(PlainButtonStyle())
+        .disabled(disabled)
+        .accessibilityLabel(label)
     }
 
     private func settingToggle(_ title: String, isOn: Binding<Bool>, caption: String?) -> some View {

@@ -65,6 +65,39 @@ struct NotchMetrics: Equatable {
     /// Vertical space the expanded panel must leave clear for the physical camera.
     var expandedTopClearance: CGFloat { max(35, notchSize.height) }
 
+    /// Tallest the expanded panel can be drawn. Tabs size themselves to their content
+    /// (long lists scroll inside a `FittedScrollView`), so this only sizes the window.
+    var maxExpandedHeight: CGFloat { expandedTopClearance + 420 }
+
+    /// Room around the island for its drop shadow, which would otherwise be cut off at
+    /// the window's edge.
+    static let shadowPadding: CGFloat = 20
+
+    /// Size of the island's window. It is fixed at the largest the island can get so
+    /// that every size change animates inside SwiftUI instead of racing a window resize;
+    /// the transparent remainder lets clicks through (see `NotchWindowController`).
+    var canvasSize: CGSize {
+        CGSize(
+            width: max(expandedWidth, collapsedActive.width) + NotchMetrics.shadowPadding * 2,
+            height: maxExpandedHeight + NotchMetrics.shadowPadding
+        )
+    }
+
+    /// Window frame for `canvasSize`, centred and flush with the top of `screen`.
+    func canvasFrame(on screen: NSScreen) -> NSRect {
+        let size = canvasSize
+        return NSRect(
+            x: screen.frame.midX - size.width / 2,
+            y: screen.frame.maxY - size.height,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    /// The part of the expanded panel holding the tab bar, measured from the top of the
+    /// screen. Horizontal swipes here always switch tabs.
+    var tabHeaderDepth: CGFloat { expandedTopClearance + 30 }
+
     /// Hover target. Deliberately a little larger than the rendered capsule so the
     /// island is easy to hit — but no longer clamped to a fixed 240×35, which used to
     /// swallow clicks on menu-bar items near the centre of the screen.
