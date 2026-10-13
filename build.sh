@@ -46,7 +46,9 @@ fi
 echo "⚙️  Compiling ${#SOURCES[@]} Swift files..."
 
 mkdir -p "${BUILD_DIR}" "${MODULE_CACHE}"
-SDK_PATH="$(xcrun --show-sdk-path --sdk macosx)"
+# Override with SDK_PATH=... when the default SDK cannot build (e.g. a CLT-only SDK
+# whose SwiftUI macros need a compiler plugin the Command Line Tools do not ship).
+SDK_PATH="${SDK_PATH:-$(xcrun --show-sdk-path --sdk macosx)}"
 
 compile_slice() {
     local arch="$1"
