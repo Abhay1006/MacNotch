@@ -145,11 +145,23 @@ struct NotchIslandView: View {
         }
     }
 
+    /// Expanded, the top corners flare out into the screen edge so the panel grows out of
+    /// the bezel like the camera notch; collapsed, it keeps its rounded pill shape.
+    private var islandShape: NotchShape {
+        NotchShape(topCornerRadius: isExpanded ? -10 : 15, bottomCornerRadius: isExpanded ? 24 : 15)
+    }
+
     private var islandBackground: some View {
-        RoundedRectangle(cornerRadius: isExpanded ? 24 : 15)
-            .fill(Color.black.opacity(0.85))
+        var outline = islandShape
+        // No border along the screen edge when expanded — it would draw a seam where the
+        // panel is meant to merge into the top of the screen.
+        outline.closesTopEdge = !isExpanded
+
+        return islandShape
+            // Opaque when expanded so the top matches the black camera housing it meets.
+            .fill(Color.black.opacity(isExpanded ? 1 : 0.85))
             .overlay(
-                RoundedRectangle(cornerRadius: isExpanded ? 24 : 15)
+                outline
                     .stroke(isDragOver ? Color.pink : Color.white.opacity(0.12), lineWidth: isDragOver ? 2 : 1)
             )
             .shadow(color: Color.black.opacity(0.5), radius: 10, x: 0, y: 5)
