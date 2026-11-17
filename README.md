@@ -143,3 +143,9 @@ outlives a window.
 - The build is a `swiftc` script rather than a Swift package; migrating would enable XCTest.
 - On external displays the island sits at top centre and overlaps the menu bar clock; only
   built-in-display placement is properly tuned.
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 Abhay Pratap Singh
